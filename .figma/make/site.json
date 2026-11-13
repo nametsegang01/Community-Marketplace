@@ -1,0 +1,11 @@
+{
+  "description": "Shop from local sellers in Molelema Village and the surrounding Taung community.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  },
+  "title": "Molelema Rise | Village Marketplace"
+}
