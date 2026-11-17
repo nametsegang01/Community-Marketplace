@@ -467,8 +467,8 @@ export default function App() {
     <Route path="/market" element={<RequireRole roles={["customer"]}><MarketplaceApp role="buyer" /></RequireRole>} />
     <Route path="/seller" element={<RequireRole roles={["seller"]}><MarketplaceApp role="seller" /></RequireRole>} />
     <Route path="/admin" element={<RequireRole roles={["admin"]}><MarketplaceApp role="admin" /></RequireRole>} />
-    <Route path="/" element={<HomeRedirect />} />
-    <Route path="*" element={<Navigate to="/" replace />} />
+    <Route path="/" element={<Navigate to="/login" replace />} />
+    <Route path="*" element={<Navigate to="/login" replace />} />
   </Routes></AuthProvider></BrowserRouter>;
 }
 
@@ -521,19 +521,6 @@ function SellerApplicationRoute() {
     return <Navigate to="/seller" replace />;
   }
   return <SellerPendingPage />;
-}
-
-function HomeRedirect() {
-  const { user, profile, loading } = useAuth();
-  if (loading) return <AuthLoading />;
-  if (!user) return <Navigate to="/login" replace />;
-  if (!profile) return <Navigate to="/complete-profile" replace />;
-  const destination = profile.accountStatus === "suspended" || profile.accountStatus === "rejected" || profile.sellerStatus === "rejected" || (profile.role !== "seller" && profile.accountStatus !== "active")
-    ? "/account-unavailable"
-    : profile.role === "admin" ? "/admin"
-      : profile.role === "seller" ? profile.sellerStatus === "approved" && profile.accountStatus === "active" ? "/seller" : "/seller-pending"
-        : "/market";
-  return <Navigate to={destination} replace />;
 }
 
 function AuthLoading() {

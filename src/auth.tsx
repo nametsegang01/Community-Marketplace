@@ -43,9 +43,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let stopProfile: (() => void) | null = null;
+    let activeProfileUid: string | null = null;
     const stopAuth = watchAuthState((currentUser) => {
+      if (currentUser && currentUser.uid === activeProfileUid) {
+        setUser(currentUser);
+        return;
+      }
       stopProfile?.();
       stopProfile = null;
+      activeProfileUid = currentUser?.uid ?? null;
       setUser(currentUser);
       if (currentUser) {
         setLoading(true);
@@ -66,6 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, (reason) => {
       stopProfile?.();
       stopProfile = null;
+      activeProfileUid = null;
       setUser(null);
       setProfile(null);
       setError(reason.message);

@@ -176,6 +176,7 @@ export async function registerWithEmail(
     email,
     password,
     options: {
+      emailRedirectTo: `${window.location.origin}/login`,
       data: toDatabaseRecord(metadata),
     },
   });
@@ -200,7 +201,7 @@ export async function loginWithEmail(email: string, password: string, remember =
 
 export async function logout() {
   const client = requireSupabase();
-  const { error } = await client.auth.signOut();
+  const { error } = await client.auth.signOut({ scope: "local" });
   throwOnError(error);
   sessionStorage.removeItem(sessionOnlyKey);
 }
@@ -239,7 +240,10 @@ export function watchUserProfile(
     })
     .subscribe((status, error) => {
       if (!stopped && (status === "CHANNEL_ERROR" || status === "TIMED_OUT")) {
-        onError(error ?? new Error(`Supabase profile subscription failed: ${status}`));
+        console.warn(
+          "Supabase live profile updates are unavailable; profile status will still load from the database.",
+          error ?? new Error(`Supabase profile subscription failed: ${status}`),
+        );
       }
     });
 

@@ -22,7 +22,7 @@ function friendlyAuthError(error: unknown) {
   const messages: Record<string, string> = {
     user_already_exists: "This email already has an account. Try logging in instead.",
     invalid_credentials: "The email or password is incorrect.",
-    email_not_confirmed: "Email confirmation is still enabled for this Supabase project. Turn off Confirm email in the Supabase Authentication settings to sign in without verification.",
+    email_not_confirmed: "Please verify your email using the confirmation link we sent, then try logging in again.",
     weak_password: "Choose a stronger password with at least 8 characters.",
     over_request_rate_limit: "Too many attempts. Please wait a while and try again.",
     over_email_send_rate_limit: "Too many email requests. Please wait a while and try again.",
@@ -141,7 +141,7 @@ async function prepareSellerProducts(products: SellerProductForm[]): Promise<Sel
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, profile, loading, error: profileError, reloadProfile } = useAuth();
+  const { profile, loading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
@@ -150,10 +150,8 @@ export function LoginPage() {
 
   useEffect(() => {
     if (!loading && profile) navigate(routeForProfile(profile), { replace: true });
-    else if (!loading && user && !profileError) navigate("/complete-profile", { replace: true });
-  }, [loading, navigate, profile, user, profileError]);
+  }, [loading, navigate, profile]);
   if (!loading && profile) return null;
-  if (!loading && user && profileError) return <AuthLayout title="Could not load your profile" subtitle={profileError}><button className="auth-submit" onClick={() => void reloadProfile()}>Try again</button></AuthLayout>;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -269,8 +267,8 @@ export function RegisterPage() {
           replace: true,
           state: {
             message: role === "seller"
-              ? "Your seller application and products are saved. You can log in to check your application status after an administrator reviews it."
-              : "Your account is saved. You can now log in to the marketplace.",
+              ? "Your application is saved. Check your email and verify your address, then log in. Your products will be available after an administrator approves them."
+              : "Your account is saved. Check your email and verify your address before logging in.",
           },
         });
         return;
@@ -292,7 +290,7 @@ export function RegisterPage() {
       <PasswordField label="Confirm password" value={confirmPassword} onChange={setConfirmPassword} autoComplete="new-password" />
       <fieldset className="account-choice"><legend>Account type</legend><label><input type="radio" name="role" checked={role === "customer"} onChange={() => setRole("customer")} /> Customer</label><label><input type="radio" name="role" checked={role === "seller"} onChange={() => setRole("seller")} /> Seller</label></fieldset>
       {role === "seller" && <div className="seller-fields">
-        <p>Seller applications and product listings are reviewed by an administrator. Log in to check your application status.</p>
+        <p>Verify your email after registering. You can then log in to see when an administrator approves your products.</p>
         <label className="auth-field">Shop or business name<input required value={shopName} onChange={(event) => setShopName(event.target.value)} /></label>
         <label className="auth-field">Business description<textarea required rows={3} value={businessDescription} onChange={(event) => setBusinessDescription(event.target.value)} /></label>
         <label className="auth-field">Village or location<input required value={village} onChange={(event) => setVillage(event.target.value)} /></label>
@@ -451,11 +449,30 @@ export function ProfilePage() {
 export function SellerPendingPage() {
   const { profile } = useAuth();
   const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
   if (profile?.sellerStatus === "approved" && profile.accountStatus === "active") return <Navigate to="/seller" replace />;
-  return <AuthLayout title="Awaiting admin approval" subtitle="Your email is verified and your seller application is with the Molelema Rise admin team.">
-    <div className="auth-note"><strong>{profile?.shopName}</strong><p>Your submitted products will be published after an administrator approves your application. You can log back in anytime to check for an update.</p></div>
-    <button className="auth-submit" onClick={() => navigate("/profile")}>View my profile</button>
-    <button className="auth-secondary" onClick={() => void logout().catch((error: Error) => window.alert(friendlyAuthError(error)))}>Log out</button>
+  async function returnToLogin() {
+    setBusy(true);
+    setMessage("");
+    try {
+      await logout();
+      navigate("/login", { replace: true });
+    } catch (error) {
+      setMessage(friendlyAuthError(error));
+      setBusy(false);
+    }
+  }
+  return <AuthLayout title="Seller application pending" subtitle="Your seller application is awaiting review.">
+    <div className="approval-popup-backdrop">
+      <section className="approval-popup" role="dialog" aria-modal="true" aria-labelledby="approval-popup-title">
+        <span className="eyebrow">Seller application</span>
+        <h2 id="approval-popup-title">Awaiting for products to be verified</h2>
+        <p>Your submitted products are waiting for an administrator to review them. Press Okay to return to the login page.</p>
+        {message && <p className="auth-error" role="alert">{message}</p>}
+        <button className="auth-submit" disabled={busy} onClick={() => void returnToLogin()}>{busy ? "Returning to login..." : "Okay"}</button>
+      </section>
+    </div>
   </AuthLayout>;
 }
 

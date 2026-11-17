@@ -450,3 +450,13 @@ button:focus-visible,input:focus-visible,select:focus-visible { outline:3px soli
   .category-form { align-items:stretch; flex-direction:column; }
   .category-form .primary { min-height:44px; }
 }
+
+.approval-popup-backdrop { position:fixed; z-index:90; inset:0; display:grid; place-items:center; padding:18px; background:rgba(35,42,34,.62); backdrop-filter:blur(3px); }
+.approval-popup { width:min(100%,480px); padding:30px; background:#fffaf2; border:1px solid #e4d8c8; border-top:6px solid var(--accent); border-radius:8px; box-shadow:0 20px 60px rgba(25,27,43,.28); }
+.approval-popup h2 { margin:8px 0 10px; color:#304636; font-family:Georgia,serif; font-size:26px; }
+.approval-popup > p:not(.auth-error) { margin:0 0 20px; color:#66594c; font-size:14px; }
+.approval-popup .auth-submit { width:100%; }
+@media(max-width:600px) {
+  .approval-popup { padding:24px 18px; }
+  .approval-popup h2 { font-size:23px; }
+}
