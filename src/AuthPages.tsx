@@ -9,8 +9,10 @@ import {
   registerWithEmail,
   requestPasswordReset,
   updateOwnUserProfile,
+  uploadProductImage,
+  type SellerProductDraft,
   type UserProfileDraft,
-} from "./firebase";
+} from "./supabase";
 import { useAuth } from "./auth";
 
 function friendlyAuthError(error: unknown) {
@@ -18,20 +20,16 @@ function friendlyAuthError(error: unknown) {
     ? String(error.code)
     : "";
   const messages: Record<string, string> = {
-    "auth/email-already-in-use": "This email already has an account. Try logging in instead.",
-    "auth/invalid-email": "Enter a valid email address.",
-    "auth/weak-password": "Choose a stronger password with at least 8 characters.",
-    "auth/invalid-credential": "The email or password is incorrect.",
-    "auth/user-not-found": "We couldn’t find an account with that email.",
-    "auth/wrong-password": "The email or password is incorrect.",
-    "auth/too-many-requests": "Too many attempts. Please wait a while and try again.",
-    "auth/network-request-failed": "Network problem. Check your connection and try again.",
-    "auth/operation-not-allowed": "Email and password sign-in is not enabled. Enable it in Firebase Authentication settings.",
-    "auth/invalid-api-key": "Firebase rejected the app configuration. Check your existing project's web-app settings.",
-    "permission-denied": "Firebase denied this request. Check that the published Firestore rules allow this action.",
+    user_already_exists: "This email already has an account. Try logging in instead.",
+    invalid_credentials: "The email or password is incorrect.",
+    email_not_confirmed: "Email confirmation is still enabled for this Supabase project. Turn off Confirm email in the Supabase Authentication settings to sign in without verification.",
+    weak_password: "Choose a stronger password with at least 8 characters.",
+    over_request_rate_limit: "Too many attempts. Please wait a while and try again.",
+    over_email_send_rate_limit: "Too many email requests. Please wait a while and try again.",
+    "42501": "Supabase denied this request. Check that the database setup and row-level security policies are installed.",
   };
   if (messages[code]) return messages[code];
-  if (code.endsWith("/permission-denied")) return messages["permission-denied"];
+  if (code === "PGRST301") return messages["42501"];
   if (error instanceof Error && error.message) return error.message;
   return "Something went wrong. Please try again.";
 }
@@ -57,6 +55,89 @@ function PasswordField({ label, value, onChange, required = true, autoComplete }
   </label>;
 }
 
+type SellerProductForm = {
+  name: string;
+  detail: string;
+  price: string;
+  stock: string;
+  unit: string;
+  category: string;
+  file: File | null;
+};
+
+function emptySellerProduct(): SellerProductForm {
+  return { name: "", detail: "", price: "", stock: "", unit: "each", category: "", file: null };
+}
+
+function SellerProductEditor({
+  products,
+  onChange,
+  onError,
+}: {
+  products: SellerProductForm[];
+  onChange: (products: SellerProductForm[]) => void;
+  onError: (message: string) => void;
+}) {
+  function updateProduct(index: number, updates: Partial<SellerProductForm>) {
+    onChange(products.map((product, productIndex) => productIndex === index
+      ? { ...product, ...updates }
+      : product));
+  }
+
+  return <>
+    <div className="seller-product-heading"><strong>Products to sell</strong><small>Add at least one product. You can list up to three to start.</small></div>
+    {products.map((product, index) => <fieldset className="seller-product-form" key={index}>
+      <legend>Product {index + 1}</legend>
+      <label className="auth-field">Product name<input required value={product.name} onChange={(event) => updateProduct(index, { name: event.target.value })} /></label>
+      <label className="auth-field">Description<input required value={product.detail} onChange={(event) => updateProduct(index, { detail: event.target.value })} /></label>
+      <div className="auth-form-row">
+        <label className="auth-field">Price (R)<input required min="0.01" step="0.01" type="number" value={product.price} onChange={(event) => updateProduct(index, { price: event.target.value })} /></label>
+        <label className="auth-field">Stock<input required min="1" step="1" type="number" value={product.stock} onChange={(event) => updateProduct(index, { stock: event.target.value })} /></label>
+      </div>
+      <div className="auth-form-row">
+        <label className="auth-field">Category<input required value={product.category} onChange={(event) => updateProduct(index, { category: event.target.value })} /></label>
+        <label className="auth-field">Sold by<select value={product.unit} onChange={(event) => updateProduct(index, { unit: event.target.value })}><option>each</option><option>per litre</option><option>per bundle</option><option>per tub</option><option>per bakkie</option></select></label>
+      </div>
+      <label className="auth-field">Product photo<input required type="file" accept="image/*" onChange={(event) => {
+        const file = event.target.files?.[0] ?? null;
+        if (file && (!file.type.startsWith("image/") || file.size > 5 * 1024 * 1024)) {
+          onError(file.type.startsWith("image/") ? "Choose an image smaller than 5 MB." : "Choose an image file.");
+          event.target.value = "";
+          return;
+        }
+        onError("");
+        updateProduct(index, { file });
+      }} />{product.file && <small>{product.file.name}</small>}</label>
+      {products.length > 1 && <button className="auth-secondary" type="button" onClick={() => onChange(products.filter((_, productIndex) => productIndex !== index))}>Remove product</button>}
+    </fieldset>)}
+    {products.length < 3 && <button className="auth-secondary" type="button" onClick={() => onChange([...products, emptySellerProduct()])}>Add another product</button>}
+  </>;
+}
+
+async function prepareSellerProducts(products: SellerProductForm[]): Promise<SellerProductDraft[]> {
+  const prepared = await Promise.all(products.map(async (product) => {
+    if (!product.file) throw new Error("Choose a photo for each product.");
+    const price = Number(product.price);
+    const stock = Number(product.stock);
+    if (!Number.isFinite(price) || price <= 0 || !Number.isInteger(stock) || stock <= 0) {
+      throw new Error("Each product needs a price above zero and a positive whole-number stock count.");
+    }
+    return {
+      name: product.name.trim(),
+      detail: product.detail.trim(),
+      price,
+      stock,
+      unit: product.unit,
+      category: product.category.trim(),
+      image: await uploadProductImage(product.file),
+    };
+  }));
+  if (prepared.reduce((total, product) => total + product.image.length, 0) > 1_200_000) {
+    throw new Error("The combined product photos are too large. Choose smaller images and try again.");
+  }
+  return prepared;
+}
+
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -80,7 +161,8 @@ export function LoginPage() {
     setMessage("");
     try {
       const credential = await loginWithEmail(email.trim(), password, remember);
-      const userProfile = await getUserProfile(credential.user.uid);
+      if (!credential.user) throw new Error("Supabase did not return the signed-in account.");
+      const userProfile = await getUserProfile(credential.user.id);
       if (!userProfile) {
         navigate("/complete-profile", { replace: true });
         return;
@@ -106,7 +188,7 @@ export function LoginPage() {
       <div className="auth-inline"><label><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} /> Keep me logged in</label><Link to="/reset-password">Forgot password?</Link></div>
       {message && <p className="auth-error" role="alert">{message}</p>}
       <button className="auth-submit" disabled={busy || !auth}>{busy ? "Logging in..." : "Log in"}</button>
-      {!auth && <p className="auth-help">Firebase is not configured. Add the existing project's web-app values to `.env.local`.</p>}
+      {!auth && <p className="auth-help">Supabase is not configured. Add your project URL and publishable key to `.env.local`.</p>}
     </form>
     <p className="auth-footer">New to Molelema Rise? <Link to="/register">Create an account</Link></p>
   </AuthLayout>;
@@ -125,6 +207,7 @@ export function RegisterPage() {
   const [shopName, setShopName] = useState("");
   const [businessDescription, setBusinessDescription] = useState("");
   const [village, setVillage] = useState("");
+  const [sellerProducts, setSellerProducts] = useState<SellerProductForm[]>([emptySellerProduct()]);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -152,6 +235,10 @@ export function RegisterPage() {
       setMessage("Complete your shop name, business description and village.");
       return;
     }
+    if (role === "seller" && sellerProducts.length === 0) {
+      setMessage("Add at least one product to your seller application.");
+      return;
+    }
     if (!termsAccepted) {
       setMessage("Please accept the Terms and Privacy Policy to continue.");
       return;
@@ -174,11 +261,18 @@ export function RegisterPage() {
 
     setBusy(true);
     try {
-      const credential = await registerWithEmail(draft.email, password);
-      try {
-        await createUserProfile(credential.user, draft);
-      } catch (error) {
-        navigate("/complete-profile", { replace: true, state: { draft, message: `Your login was created, but your profile could not be saved: ${friendlyAuthError(error)}. Retry profile setup without creating another account.` } });
+      const applicationProducts = role === "seller" ? await prepareSellerProducts(sellerProducts) : [];
+      const credential = await registerWithEmail(draft.email, password, draft, applicationProducts);
+      if (!credential.user) throw new Error("Supabase did not return the new account.");
+      if (!credential.session) {
+        navigate("/login", {
+          replace: true,
+          state: {
+            message: role === "seller"
+              ? "Your seller application and products are saved. You can log in to check your application status after an administrator reviews it."
+              : "Your account is saved. You can now log in to the marketplace.",
+          },
+        });
         return;
       }
       navigate(role === "seller" ? "/seller-pending" : "/market", { replace: true });
@@ -197,11 +291,17 @@ export function RegisterPage() {
       <PasswordField label="Password" value={password} onChange={setPassword} autoComplete="new-password" />
       <PasswordField label="Confirm password" value={confirmPassword} onChange={setConfirmPassword} autoComplete="new-password" />
       <fieldset className="account-choice"><legend>Account type</legend><label><input type="radio" name="role" checked={role === "customer"} onChange={() => setRole("customer")} /> Customer</label><label><input type="radio" name="role" checked={role === "seller"} onChange={() => setRole("seller")} /> Seller</label></fieldset>
-      {role === "seller" && <div className="seller-fields"><p>Seller applications are reviewed by an administrator before shop tools are enabled.</p><label className="auth-field">Shop or business name<input required value={shopName} onChange={(event) => setShopName(event.target.value)} /></label><label className="auth-field">Business description<textarea required rows={3} value={businessDescription} onChange={(event) => setBusinessDescription(event.target.value)} /></label><label className="auth-field">Village or location<input required value={village} onChange={(event) => setVillage(event.target.value)} /></label></div>}
+      {role === "seller" && <div className="seller-fields">
+        <p>Seller applications and product listings are reviewed by an administrator. Log in to check your application status.</p>
+        <label className="auth-field">Shop or business name<input required value={shopName} onChange={(event) => setShopName(event.target.value)} /></label>
+        <label className="auth-field">Business description<textarea required rows={3} value={businessDescription} onChange={(event) => setBusinessDescription(event.target.value)} /></label>
+        <label className="auth-field">Village or location<input required value={village} onChange={(event) => setVillage(event.target.value)} /></label>
+        <SellerProductEditor products={sellerProducts} onChange={setSellerProducts} onError={setMessage} />
+      </div>}
       <label className="terms-check"><input required type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} /> I accept the <a href="/terms" target="_blank" rel="noreferrer">Terms</a> and <a href="/privacy" target="_blank" rel="noreferrer">Privacy Policy</a>.</label>
       {message && <p className="auth-error" role="alert">{message}</p>}
-      <button className="auth-submit" disabled={busy || !auth}>{busy ? "Creating account..." : role === "seller" ? "Submit seller application" : "Create customer account"}</button>
-      {!auth && <p className="auth-help">Firebase is not configured. Add the existing project's web-app values to `.env.local`.</p>}
+      <button className="auth-submit" disabled={busy || !auth}>{busy ? role === "seller" ? "Preparing application..." : "Creating account..." : role === "seller" ? "Submit seller application" : "Create customer account"}</button>
+      {!auth && <p className="auth-help">Supabase is not configured. Add your project URL and publishable key to `.env.local`.</p>}
     </form>
     <p className="auth-footer">Already have an account? <Link to="/login">Log in</Link></p>
   </AuthLayout>;
@@ -219,6 +319,7 @@ export function CompleteProfilePage() {
   const [shopName, setShopName] = useState(draft?.shopName ?? "");
   const [businessDescription, setBusinessDescription] = useState(draft?.businessDescription ?? "");
   const [village, setVillage] = useState(draft?.village ?? "");
+  const [sellerProducts, setSellerProducts] = useState<SellerProductForm[]>([emptySellerProduct()]);
   const [termsAccepted, setTermsAccepted] = useState(Boolean(draft?.termsAccepted));
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -248,6 +349,7 @@ export function CompleteProfilePage() {
     setBusy(true);
     setMessage("");
     try {
+      const applicationProducts = role === "seller" ? await prepareSellerProducts(sellerProducts) : [];
       await createUserProfile(user, {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
@@ -256,7 +358,7 @@ export function CompleteProfilePage() {
         role,
         accountStatus: role === "seller" ? "pending" : "active",
         ...(role === "seller" ? { shopName: shopName.trim(), businessDescription: businessDescription.trim(), village: village.trim(), sellerStatus: "pending" as const } : {}),
-      });
+      }, applicationProducts);
       await reloadProfile();
       navigate(role === "seller" ? "/seller-pending" : "/market", { replace: true });
     } catch (error) {
@@ -268,13 +370,13 @@ export function CompleteProfilePage() {
 
   return <AuthLayout title="Finish your profile" subtitle="Your account already exists. Complete this profile to continue.">
     {location.state?.message && <p className="auth-note">{String(location.state.message)}</p>}
-    {profileError && <p className="auth-error" role="alert">Could not load the saved profile: {profileError}. Check your Firestore rules or network, then retry.</p>}
+    {profileError && <p className="auth-error" role="alert">Could not load the saved profile: {profileError}. Check your Supabase policies or network, then retry.</p>}
     <form className="auth-form" onSubmit={submit}>
       <label className="auth-field">Email address<input readOnly value={user?.email ?? ""} /></label>
       <div className="auth-form-row"><label className="auth-field">First name<input required value={firstName} onChange={(event) => setFirstName(event.target.value)} /></label><label className="auth-field">Last name<input required value={lastName} onChange={(event) => setLastName(event.target.value)} /></label></div>
       <label className="auth-field">Phone number<input required type="tel" value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} /></label>
       <fieldset className="account-choice"><legend>Account type</legend><label><input type="radio" name="recovery-role" checked={role === "customer"} onChange={() => setRole("customer")} /> Customer</label><label><input type="radio" name="recovery-role" checked={role === "seller"} onChange={() => setRole("seller")} /> Seller</label></fieldset>
-      {role === "seller" && <><label className="auth-field">Shop or business name<input required value={shopName} onChange={(event) => setShopName(event.target.value)} /></label><label className="auth-field">Business description<textarea required rows={3} value={businessDescription} onChange={(event) => setBusinessDescription(event.target.value)} /></label><label className="auth-field">Village or location<input required value={village} onChange={(event) => setVillage(event.target.value)} /></label></>}
+      {role === "seller" && <><label className="auth-field">Shop or business name<input required value={shopName} onChange={(event) => setShopName(event.target.value)} /></label><label className="auth-field">Business description<textarea required rows={3} value={businessDescription} onChange={(event) => setBusinessDescription(event.target.value)} /></label><label className="auth-field">Village or location<input required value={village} onChange={(event) => setVillage(event.target.value)} /></label><SellerProductEditor products={sellerProducts} onChange={setSellerProducts} onError={setMessage} /></>}
       <label className="terms-check"><input required type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} /> I accept the <a href="/terms" target="_blank" rel="noreferrer">Terms</a> and <a href="/privacy" target="_blank" rel="noreferrer">Privacy Policy</a>.</label>
       {message && <p className="auth-error" role="alert">{message}</p>}
       <button className="auth-submit" disabled={busy}>{busy ? "Saving profile..." : "Save profile"}</button>
@@ -350,8 +452,8 @@ export function SellerPendingPage() {
   const { profile } = useAuth();
   const navigate = useNavigate();
   if (profile?.sellerStatus === "approved" && profile.accountStatus === "active") return <Navigate to="/seller" replace />;
-  return <AuthLayout title="Application received" subtitle="Thank you for applying to sell on Molelema Rise.">
-    <div className="auth-note"><strong>{profile?.shopName}</strong><p>Your seller application is pending administrator approval. Seller management tools will unlock after approval.</p></div>
+  return <AuthLayout title="Awaiting admin approval" subtitle="Your email is verified and your seller application is with the Molelema Rise admin team.">
+    <div className="auth-note"><strong>{profile?.shopName}</strong><p>Your submitted products will be published after an administrator approves your application. You can log back in anytime to check for an update.</p></div>
     <button className="auth-submit" onClick={() => navigate("/profile")}>View my profile</button>
     <button className="auth-secondary" onClick={() => void logout().catch((error: Error) => window.alert(friendlyAuthError(error)))}>Log out</button>
   </AuthLayout>;
@@ -368,7 +470,7 @@ export function PolicyPage({ kind }: { kind: "terms" | "privacy" }) {
   return <AuthLayout title={isTerms ? "Marketplace terms" : "Privacy policy"} subtitle="Molelema Rise Community Marketplace">
     {isTerms
       ? <div className="policy-copy"><h2>Using the marketplace</h2><p>Use accurate contact and shop information. Customers are responsible for confirming receipt and payment honestly. Sellers are responsible for product listings, stock counts, and order updates.</p><h2>Seller applications</h2><p>Seller tools are available only after an administrator approves the application. Do not list products you cannot supply.</p><h2>Cash orders</h2><p>Orders use cash at pickup or delivery. The marketplace does not process or hold payments.</p><h2>Fair use</h2><p>Do not misuse accounts, share another person’s private information, or post unlawful or misleading listings.</p></div>
-      : <div className="policy-copy"><h2>Information we collect</h2><p>We store account name, email, phone number, and seller application details to operate the marketplace. Orders include the buyer, seller, products, and order status so both parties can fulfil and track a purchase.</p><h2>How information is used</h2><p>Account information is used to provide marketplace features, support orders, prevent misuse, and review seller applications. Customer profiles and order histories are restricted to the account owner and authorized administrators under Firestore rules.</p><h2>Your choices</h2><p>Keep your account details accurate. Contact the marketplace administrator to request help with your account or personal information.</p></div>}
+      : <div className="policy-copy"><h2>Information we collect</h2><p>We store account name, email, phone number, and seller application details to operate the marketplace. Orders include the buyer, seller, products, and order status so both parties can fulfil and track a purchase.</p><h2>How information is used</h2><p>Account information is used to provide marketplace features, support orders, prevent misuse, and review seller applications. Customer profiles and order histories are restricted to the account owner and authorized administrators under Supabase row-level security policies.</p><h2>Your choices</h2><p>Keep your account details accurate. Contact the marketplace administrator to request help with your account or personal information.</p></div>}
     <p className="auth-footer"><Link to="/register">Back to registration</Link></p>
   </AuthLayout>;
 }

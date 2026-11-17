@@ -1,14 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import type { User } from "firebase/auth";
 import {
   getUserProfile,
   watchAuthState,
   watchUserProfile,
+  type AuthUser,
   type UserProfile,
-} from "./firebase";
+} from "./supabase";
 
 type AuthState = {
-  user: User | null;
+  user: AuthUser | null;
   profile: UserProfile | null;
   loading: boolean;
   error: string;
@@ -18,12 +18,12 @@ type AuthState = {
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const loadProfile = useCallback(async (currentUser: User) => {
+  const loadProfile = useCallback(async (currentUser: AuthUser) => {
     setLoading(true);
     setError("");
     try {

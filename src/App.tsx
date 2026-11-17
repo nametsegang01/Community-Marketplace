@@ -12,7 +12,6 @@ import {
   SellerPendingPage,
 } from "./AuthPages";
 import {
-  firebaseReady,
   placeOrder,
   removeRecord,
   removeSellerRecords,
@@ -22,8 +21,9 @@ import {
   setSellerApproval,
   uploadProductImage,
   watchCollection,
+  type SellerProductApplication,
   type UserProfile,
-} from "./firebase";
+} from "./supabase";
 
 type Role = "buyer" | "seller" | "admin";
 type IconName =
@@ -73,23 +73,13 @@ type Order = {
   createdAt: number;
 };
 
-const initialSellers: Seller[] = [
-  { id: "motsamai", name: "Mr Motsamai Firewood", place: "Masakaneng", image: "/assets/seller-firewood.png", sales: 112, active: true },
-  { id: "kabo", name: "Mr Kabo Dairy", place: "Teledimo", image: "/assets/seller-dairy.png", sales: 84, active: true },
-  { id: "landan", name: "Landan's Kitchen", place: "Near Tutu Depot", image: "/assets/seller-atchaar.png", sales: 65, active: true },
-  { id: "hair", name: "Molelema Hair & Weaves", place: "Kanana", image: "/assets/seller-hair.png", sales: 42, active: true },
-  { id: "scents", name: "Village Scents", place: "Main Road", image: "/assets/seller-perfume.png", sales: 38, active: true },
-  { id: "kagisano", name: "Kagisano Luxury", place: "Near Clinic", image: "/assets/seller-lotion.png", sales: 29, active: true },
-];
-
-const initialProducts: Product[] = [
-  { id: "milk", sellerId: "kabo", seller: "Mr Kabo Dairy", name: "Fresh Morning Cow Milk", detail: "2L & 1L • Raw cow milk", place: "Masakaneng", price: 24, stock: 18, unit: "per litre", category: "Fresh Milk", image: "/assets/milk.png" },
-  { id: "firewood", sellerId: "motsamai", seller: "Mr Motsamai Firewood", name: "Dry Hardwood Firewood", detail: "Full bakkie or bundle", place: "Teledimo", price: 450, stock: 3, unit: "per bakkie", category: "Firewood", image: "/assets/firewood.png" },
-  { id: "atchaar", sellerId: "landan", seller: "Landan's Kitchen", name: "Homemade Mango Atchaar", detail: "500g • Family recipe", place: "Kanana", price: 35, stock: 24, unit: "per tub", category: "Atchaar", image: "/assets/atchaar.png" },
-  { id: "perfume", sellerId: "scents", seller: "Village Scents", name: "Luxury Pocket Perfume", detail: "Desire, Sugar & Oud", place: "Main Road", price: 40, stock: 13, unit: "each", category: "Beauty", image: "/assets/perfume.png" },
-  { id: "lotion", sellerId: "kagisano", seller: "Kagisano Luxury", name: "Nourishing Body Lotion", detail: "Everyday body care", place: "Near Clinic", price: 55, stock: 9, unit: "each", category: "Beauty", image: "/assets/lotion.png" },
-  { id: "weave", sellerId: "hair", seller: "Molelema Hair & Weaves", name: "Brazilian Human Hair Weave", detail: "100% Brazilian hair", place: "Kanana", price: 280, stock: 6, unit: "per bundle", category: "Hair", image: "/assets/hair.png" },
-];
+type OrderDetailLine = {
+  productId: string;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  unit: string;
+};
 
 const initialCategories: Category[] = [
   { id: "firewood", name: "Firewood" },
@@ -139,12 +129,14 @@ function Sheet({ title, onClose, children }: { title: string; onClose: () => voi
   return <div className="scrim" onClick={onClose}><aside className="drawer" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><h2>{title}</h2><button className="icon-button" onClick={onClose}><Icon name="close" /></button></div>{children}</aside></div>;
 }
 
-function OrderTracker({ order, confirmReceived }: { order: Order; confirmReceived: (order: Order) => void }) {
+function OrderTracker({ order, confirmReceived }: { order: Order; confirmReceived: (order: Order) => Promise<void> }) {
   const current = Math.max(0, orderSteps.indexOf(order.status));
   const [received, setReceived] = useState(Boolean(order.buyerReceived));
   const [paid, setPaid] = useState<"yes" | "no" | "">(
     order.buyerPaid === undefined ? "" : order.buyerPaid ? "yes" : "no",
   );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   useEffect(() => {
     setReceived(Boolean(order.buyerReceived));
     setPaid(order.buyerPaid === undefined ? "" : order.buyerPaid ? "yes" : "no");
@@ -159,47 +151,139 @@ function OrderTracker({ order, confirmReceived }: { order: Order; confirmReceive
       <strong>Have you paid the seller?</strong>
       <label className="paid-toggle"><input type="radio" name={`buyer-paid-${order.id}`} checked={paid === "yes"} onChange={() => setPaid("yes")} /><span><strong>Yes, I paid in cash</strong></span></label>
       <label className="paid-toggle"><input type="radio" name={`buyer-paid-${order.id}`} checked={paid === "no"} onChange={() => setPaid("no")} /><span><strong>No, I have not paid yet</strong></span></label>
-      <button className="primary wide" disabled={!received || !paid} onClick={() => confirmReceived({ ...order, buyerReceived: true, buyerPaid: paid === "yes" })}>Confirm my answers</button>
+      {error && <p className="auth-error" role="alert">{error}</p>}
+      <button className="primary wide" disabled={!received || !paid || saving} onClick={() => {
+        setSaving(true);
+        setError("");
+        void confirmReceived({ ...order, buyerReceived: true, buyerPaid: paid === "yes" })
+          .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Could not save your confirmation. Please try again."))
+          .finally(() => setSaving(false));
+      }}>{saving ? "Saving confirmation..." : "Confirm my answers"}</button>
     </div>}
     {order.buyerReceived && order.buyerPaid && <p className="receipt-status">You confirmed that you received the order and paid the seller.</p>}
     {order.buyerReceived && !order.buyerPaid && <p className="receipt-status">You confirmed receipt. Please pay the seller before confirming payment and completing the order.</p>}
   </div>;
 }
 
-function Buyer({ uid, products, orders, createOrder, updateOrder, notify }: { uid: string; products: Product[]; orders: Order[]; createOrder: (order: Order, productUpdates: { productId: string; quantity: number }[]) => Promise<void>; updateOrder: (order: Order) => void; notify: (message: string) => void }) {
+function OrderDialog({
+  order,
+  lines,
+  mode,
+  onShowDetails,
+  onTrack,
+  onClose,
+}: {
+  order: Order;
+  lines: OrderDetailLine[];
+  mode: "success" | "details";
+  onShowDetails: () => void;
+  onTrack: () => void;
+  onClose: () => void;
+}) {
+  return <div className="order-dialog-scrim" onClick={onClose}>
+    <section className="order-dialog" role="dialog" aria-modal="true" aria-labelledby="order-dialog-title" onClick={(event) => event.stopPropagation()}>
+      <button className="icon-button order-dialog-close" aria-label="Close order message" onClick={onClose}><Icon name="close" /></button>
+      {mode === "success" ? <>
+        <span className="order-dialog-mark"><Icon name="check" size={27} /></span>
+        <span className="eyebrow">Order confirmed</span>
+        <h2 id="order-dialog-title">Thank you for your order!</h2>
+        <p>Your cash order <strong>{order.id}</strong> has been placed. What would you like to do next?</p>
+        <div className="order-dialog-actions">
+          <button className="primary wide" onClick={onShowDetails}>View order details</button>
+          <button className="order-dialog-secondary" onClick={onTrack}>Track order</button>
+          <button className="order-dialog-okay" onClick={onClose}>Okay</button>
+        </div>
+      </> : <>
+        <span className="eyebrow">Order details</span>
+        <h2 id="order-dialog-title">Your purchase</h2>
+        <p className="order-dialog-reference">{order.id} · {order.seller}</p>
+        <div className="order-detail-lines">
+          {lines.map((line) => <div className="order-detail-line" key={line.productId}>
+            <span><strong>{line.name}</strong><small>{line.quantity} × R{line.unitPrice.toFixed(2)} per {line.unit}</small></span>
+            <b>R{(line.quantity * line.unitPrice).toFixed(2)}</b>
+          </div>)}
+          {order.delivery === "Gate delivery" && <div className="order-detail-line"><span><strong>Gate delivery</strong></span><b>R15.00</b></div>}
+        </div>
+        <div className="order-detail-total"><span>Total · {order.delivery}</span><strong>R{order.amount.toFixed(2)}</strong></div>
+        <p>Would you like to track this order?</p>
+        <div className="order-dialog-actions order-detail-actions">
+          <button className="primary wide" onClick={onTrack}>Track this order</button>
+          <button className="order-dialog-okay" onClick={onClose}>Not now · Okay</button>
+        </div>
+      </>}
+    </section>
+  </div>;
+}
+
+function Buyer({ uid, products, orders, createOrder, updateOrder, notify }: { uid: string; products: Product[]; orders: Order[]; createOrder: (order: Order, productUpdates: { productId: string; quantity: number }[]) => Promise<void>; updateOrder: (order: Order) => Promise<void>; notify: (message: string) => void }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
   const [cart, setCart] = useState<string[]>([]);
   const [sheet, setSheet] = useState<"cart" | "track" | null>(null);
   const [delivery, setDelivery] = useState<"Yard pickup" | "Gate delivery">("Yard pickup");
   const [tracked, setTracked] = useState<Order | null>(null);
+  const [orderDialog, setOrderDialog] = useState<{ order: Order; lines: OrderDetailLine[]; mode: "success" | "details" } | null>(null);
   const [placingOrder, setPlacingOrder] = useState(false);
+  const [checkoutError, setCheckoutError] = useState("");
   const categories = ["All", ...new Set(products.map((product) => product.category))];
   const shown = useMemo(() => products.filter((product) => product.stock > 0 && (category === "All" || product.category === category) && `${product.name} ${product.seller}`.toLowerCase().includes(query.toLowerCase())), [products, category, query]);
   const total = cart.reduce((sum, id) => sum + (products.find((product) => product.id === id)?.price ?? 0), delivery === "Gate delivery" ? 15 : 0);
 
   async function checkout() {
     if (placingOrder) return;
+    setCheckoutError("");
+    if (cart.length === 0) {
+      setCheckoutError("Your basket is empty. Add a product before checking out.");
+      return;
+    }
+    const unavailable = cart.find((productId) => !products.some((product) => product.id === productId));
+    if (unavailable) {
+      setCheckoutError("A product in your basket is no longer available. Remove it and try again.");
+      return;
+    }
     const productUpdates = [...new Set(cart)].map((productId) => ({
       productId,
       quantity: cart.filter((id) => id === productId).length,
     }));
+    const outOfStock = productUpdates.find(({ productId, quantity }) => {
+      const product = products.find((item) => item.id === productId);
+      return !product || quantity > product.stock;
+    });
+    if (outOfStock) {
+      setCheckoutError(`${products.find((product) => product.id === outOfStock.productId)?.name ?? "A product"} no longer has enough stock. Update your basket and try again.`);
+      return;
+    }
+    const sellerIds = new Set(productUpdates.map(({ productId }) => products.find((product) => product.id === productId)?.sellerId));
+    if (sellerIds.size !== 1) {
+      setCheckoutError("Place one seller's order at a time. Remove products from other sellers and try again.");
+      return;
+    }
     const lines = productUpdates.map(({ productId, quantity }) => {
       const product = products.find((item) => item.id === productId);
       return product ? `${quantity}× ${product.name}` : "";
     }).filter(Boolean);
     const first = products.find((product) => product.id === cart[0]);
-    if (!first) return;
-    const order: Order = { id: `MLM-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`, buyerId: uid, buyer: "You", sellerId: first.sellerId, seller: first.seller, items: lines.join(", "), productLines: productUpdates, amount: total, delivery, status: "Order placed", paid: false, createdAt: Date.now() };
+    if (!first) {
+      setCheckoutError("Your basket is empty. Add a product before checking out.");
+      return;
+    }
+    const order: Order = { id: `MLM-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`, buyerId: uid, buyer: "You", sellerId: first.sellerId, seller: first.seller, items: lines.join(", "), productLines: productUpdates, amount: Number(total.toFixed(2)), delivery, status: "Order placed", paid: false, createdAt: Date.now() };
+    const detailLines = productUpdates.map(({ productId, quantity }) => {
+      const product = products.find((item) => item.id === productId);
+      return product ? { productId, name: product.name, quantity, unitPrice: product.price, unit: product.unit } : null;
+    }).filter((line): line is OrderDetailLine => line !== null);
     setPlacingOrder(true);
     try {
       await createOrder(order, productUpdates);
       setTracked(order);
       setCart([]);
-      setSheet("track");
+      setSheet(null);
+      setOrderDialog({ order, lines: detailLines, mode: "success" });
       notify("Cash order placed. Stock has been updated.");
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Could not place your order. Please try again.");
+      const message = error instanceof Error ? error.message : "Could not place your order. Please try again.";
+      setCheckoutError(message);
+      notify(`Order not placed: ${message}`);
     } finally {
       setPlacingOrder(false);
     }
@@ -220,12 +304,21 @@ function Buyer({ uid, products, orders, createOrder, updateOrder, notify }: { ui
     </section>
     {cart.length > 0 && <button className="floating-cart" onClick={() => setSheet("cart")}><span><b>{cart.length}</b><span>View basket<small>Cash only</small></span></span><strong>R{total.toFixed(2)} <Icon name="basket" /></strong></button>}
     {sheet === "cart" && <Sheet title="Your basket" onClose={() => setSheet(null)}>
-      <div className="cart-items">{products.filter((product) => cart.includes(product.id)).map((product) => { const count = cart.filter((id) => id === product.id).length; return <div className="cart-item" key={product.id}><img src={product.image} alt="" /><div><strong>{product.name}</strong><small>{product.seller} · {product.stock} in stock</small><b>R{(product.price * count).toFixed(2)}</b></div><div className="quantity"><button onClick={() => setCart((items) => items.filter((_, index) => index !== items.indexOf(product.id)))}><Icon name="minus" size={14} /></button><span>{count}</span><button disabled={count >= product.stock} onClick={() => setCart((items) => [...items, product.id])}><Icon name="plus" size={14} /></button></div></div>; })}</div>
+      <div className="cart-items">{products.filter((product) => cart.includes(product.id)).map((product) => { const count = cart.filter((id) => id === product.id).length; return <div className="cart-item" key={product.id}><img src={product.image} alt="" /><div><strong>{product.name}</strong><small>{product.seller} · {product.stock} in stock</small><b>R{(product.price * count).toFixed(2)}</b></div><div className="quantity"><button onClick={() => { setCheckoutError(""); setCart((items) => items.filter((_, index) => index !== items.indexOf(product.id))); }}><Icon name="minus" size={14} /></button><span>{count}</span><button disabled={count >= product.stock} onClick={() => { setCheckoutError(""); setCart((items) => [...items, product.id]); }}><Icon name="plus" size={14} /></button></div></div>; })}</div>
       <div className="delivery-choice"><button className={delivery === "Yard pickup" ? "active" : ""} onClick={() => setDelivery("Yard pickup")}><Icon name="store" /><span>Yard pickup<small>Free</small></span></button><button className={delivery === "Gate delivery" ? "active" : ""} onClick={() => setDelivery("Gate delivery")}><Icon name="truck" /><span>Gate delivery<small>+ R15</small></span></button></div>
-      <div className="cash-note"><Icon name="cash" /><span><strong>Cash payment only</strong><small>Pay the seller when you collect or receive your order.</small></span></div>
-      <div className="total-row"><span>Total cash due</span><strong>R{total.toFixed(2)}</strong></div><button className="primary wide" disabled={placingOrder} onClick={checkout}>{placingOrder ? "Checking stock..." : "Place cash order"}</button>
+      <div className="cash-note"><Icon name="cash" /><span><strong>Cash payment only</strong><small>Pay the seller on collection or delivery. After placing your order, you can track it and confirm payment.</small></span></div>
+      <div className="total-row"><span>Total cash due</span><strong>R{total.toFixed(2)}</strong></div>
+      {checkoutError && <p className="auth-error" role="alert" aria-live="assertive">{checkoutError}</p>}
+      <button type="button" className="primary wide" disabled={placingOrder || cart.length === 0} onClick={() => void checkout()}>{placingOrder ? "Placing your order..." : "Place cash order"}</button>
     </Sheet>}
-    {sheet === "track" && <Sheet title="Track your order" onClose={() => setSheet(null)}>{tracked ? <OrderTracker order={orders.find((order) => order.id === tracked.id) ?? tracked} confirmReceived={(order) => { updateOrder(order); notify(order.buyerPaid ? "Thank you for confirming receipt and payment." : "Receipt confirmed. Please pay the seller before confirming payment."); }} /> : <div className="empty"><Icon name="orders" size={36} /><h3>No orders yet</h3><p>Your cash orders will appear here after checkout.</p></div>}</Sheet>}
+    {sheet === "track" && <Sheet title="Track your order" onClose={() => setSheet(null)}>{tracked ? <OrderTracker order={orders.find((order) => order.id === tracked.id) ?? tracked} confirmReceived={async (order) => {
+      await updateOrder(order);
+      notify(order.buyerPaid ? "Thank you for confirming receipt and payment." : "Receipt confirmed. Please pay the seller before confirming payment.");
+    }} /> : <div className="empty"><Icon name="orders" size={36} /><h3>No orders yet</h3><p>Your cash orders will appear here after checkout.</p></div>}</Sheet>}
+    {orderDialog && <OrderDialog order={orderDialog.order} lines={orderDialog.lines} mode={orderDialog.mode}
+      onShowDetails={() => setOrderDialog((current) => current ? { ...current, mode: "details" } : null)}
+      onTrack={() => { setTracked(orderDialog.order); setOrderDialog(null); setSheet("track"); }}
+      onClose={() => setOrderDialog(null)} />}
   </main>;
 }
 
@@ -275,19 +368,19 @@ function ProductForm({ product, categories, onSave, onClose }: { product?: Produ
   </form></Sheet>;
 }
 
-function SellerView({ uid, profile, products, orders, categories, saveProduct, deleteProduct, updateOrder, notify }: { uid: string; profile: UserProfile; products: Product[]; orders: Order[]; categories: Category[]; saveProduct: (product: Product) => void; deleteProduct: (id: string) => void; updateOrder: (order: Order) => void; notify: (message: string) => void }) {
+function SellerView({ uid, profile, products, orders, categories, saveProduct, deleteProduct, updateOrder, notify }: { uid: string; profile: UserProfile; products: Product[]; orders: Order[]; categories: Category[]; saveProduct: (product: Product) => void; deleteProduct: (id: string) => void; updateOrder: (order: Order) => Promise<void>; notify: (message: string) => void }) {
   const [editing, setEditing] = useState<Product | "new" | null>(null);
   const currentSeller: Seller = { id: uid, name: profile.shopName ?? `${profile.firstName} ${profile.lastName}`, place: profile.village ?? "Molelema", image: "/assets/seller-firewood.png", sales: 0, active: profile.sellerStatus === "approved" };
   const mine = products.filter((product) => product.sellerId === currentSeller?.id);
   const myOrders = orders.filter((order) => order.sellerId === currentSeller?.id);
-  function advance(order: Order) {
+  async function advance(order: Order) {
     const sequence = order.delivery === "Gate delivery" ? ["Order placed", "Seller confirmed", "Out for delivery", "Completed"] : ["Order placed", "Seller confirmed", "Ready for pickup", "Completed"];
     const next = sequence[Math.min(sequence.indexOf(order.status) + 1, sequence.length - 1)];
     if (next === "Completed" && (!order.paid || !order.buyerReceived || !order.buyerPaid)) {
       notify("To complete this order, confirm you received the cash and wait for the buyer's receipt and payment confirmation.");
       return;
     }
-    updateOrder({ ...order, status: next });
+    await updateOrder({ ...order, status: next });
     notify(`Order updated to ${next}`);
   }
   return <main className="page">
@@ -295,23 +388,66 @@ function SellerView({ uid, profile, products, orders, categories, saveProduct, d
     <section className="stats-grid">{[["Products", mine.length, "Listed"], ["Stock units", mine.reduce((sum, product) => sum + product.stock, 0), "On hand"], ["New orders", myOrders.filter((order) => order.status === "Order placed").length, "Needs action"], ["Cash due", `R${myOrders.filter((order) => order.status !== "Completed").reduce((sum, order) => sum + order.amount, 0)}`, "At handover"]].map(([label, value, note]) => <article key={label}><span>{label}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
     <div className="dashboard-grid"><section><div className="section-heading"><div><span className="eyebrow">Your catalog</span><h2>Products & stock</h2></div><button className="text-action" onClick={() => setEditing("new")}><Icon name="plus" size={16} /> New</button></div>
       <div className="manage-list">{mine.map((product) => <article key={product.id}><img src={product.image} alt="" /><div><h3>{product.name}</h3><span>{product.stock} in stock</span><strong>R{product.price.toFixed(2)} {product.unit}</strong></div><div><button onClick={() => setEditing(product)}><Icon name="edit" size={16} /> Edit</button><button className="danger" onClick={() => deleteProduct(product.id)}><Icon name="trash" size={16} /></button></div></article>)}</div>
-    </section><section><div className="section-heading"><div><span className="eyebrow">Cash orders</span><h2>Incoming</h2></div><span>{myOrders.length}</span></div><div className="order-list">{myOrders.map((order) => { const finalStep = order.delivery === "Gate delivery" ? order.status === "Out for delivery" : order.status === "Ready for pickup"; const canComplete = order.paid && order.buyerReceived && order.buyerPaid; const buyerConfirmation = order.buyerPaid ? "Buyer confirmed receipt and payment" : order.buyerReceived ? "Buyer received the order but says they have not paid" : "Waiting for buyer to confirm receipt and payment"; return <article className="order-card" key={order.id}><div className="order-head"><div><span className="order-id">{order.id}</span><span className="status">{order.status}</span><h3>{order.buyer}</h3></div><strong>R{order.amount}</strong></div><div className="order-detail"><strong>{order.items}</strong><small><Icon name="cash" size={15} /> Cash • {order.delivery}</small></div><label className="paid-toggle"><input type="checkbox" checked={Boolean(order.paid)} disabled={order.status === "Completed"} onChange={(event) => { updateOrder({ ...order, paid: event.target.checked }); notify(event.target.checked ? "Payment marked as received" : "Payment marked as not received"); }} /><span><strong>I received the cash payment</strong><small>{buyerConfirmation}</small></span></label><button className="primary wide" disabled={order.status === "Completed" || (finalStep && !canComplete)} onClick={() => advance(order)}>{order.status === "Completed" ? "Order completed" : finalStep && !canComplete ? "Confirm receipt and payment first" : "Move to next step"}</button></article>; })}</div></section></div>
+    </section><section><div className="section-heading"><div><span className="eyebrow">Cash orders</span><h2>Incoming</h2></div><span>{myOrders.length}</span></div><div className="order-list">{myOrders.map((order) => { const finalStep = order.delivery === "Gate delivery" ? order.status === "Out for delivery" : order.status === "Ready for pickup"; const canComplete = order.paid && order.buyerReceived && order.buyerPaid; const buyerConfirmation = order.buyerPaid ? "Buyer confirmed receipt and payment" : order.buyerReceived ? "Buyer received the order but says they have not paid" : "Waiting for buyer to confirm receipt and payment"; return <article className="order-card" key={order.id}><div className="order-head"><div><span className="order-id">{order.id}</span><span className="status">{order.status}</span><h3>{order.buyer}</h3></div><strong>R{order.amount.toFixed(2)}</strong></div><div className="order-detail"><strong>{order.items}</strong><small><Icon name="cash" size={15} /> Cash • {order.delivery}</small></div><label className="paid-toggle"><input type="checkbox" checked={Boolean(order.paid)} disabled={order.status === "Completed"} onChange={(event) => {
+      const paid = event.target.checked;
+      void updateOrder({ ...order, paid }).then(() => notify(paid ? "Payment marked as received" : "Payment marked as not received")).catch((error: Error) => notify(`Could not update payment: ${error.message}`));
+    }} /><span><strong>I received the cash payment</strong><small>{buyerConfirmation}</small></span></label><button className="primary wide" disabled={order.status === "Completed" || (finalStep && !canComplete)} onClick={() => {
+      void advance(order).catch((error: Error) => notify(`Could not update order: ${error.message}`));
+    }}>{order.status === "Completed" ? "Order completed" : finalStep && !canComplete ? "Confirm receipt and payment first" : "Move to next step"}</button></article>; })}</div></section></div>
     {editing && <ProductForm categories={categories} product={editing === "new" ? { id: `product-${Date.now()}`, sellerId: currentSeller.id, seller: currentSeller.name, name: "", detail: "", place: currentSeller.place, price: 0, stock: 0, unit: "each", category: categories[0]?.name ?? "Other", image: "" } : editing} onClose={() => setEditing(null)} onSave={(product) => { saveProduct({ ...product, sellerId: currentSeller.id, seller: currentSeller.name, place: currentSeller.place }); setEditing(null); notify("Product saved to your catalog"); }} />}
   </main>;
 }
 
-function Admin({ sellers, products, orders, users, categories, saveProduct, deleteSeller, deleteProduct, updateOrder, toggleSeller, addCategory, deleteCategory, notify }: { sellers: Seller[]; products: Product[]; orders: Order[]; users: UserProfile[]; categories: Category[]; saveProduct: (product: Product) => void; deleteSeller: (id: string) => void; deleteProduct: (id: string) => void; updateOrder: (order: Order) => void; toggleSeller: (seller: Seller) => void; addCategory: (name: string) => Promise<void>; deleteCategory: (id: string) => void; notify: (message: string) => void }) {
+function Admin({ sellers, products, orders, users, sellerApplications, categories, saveProduct, deleteSeller, deleteProduct, updateOrder, toggleSeller, addCategory, deleteCategory, notify }: { sellers: Seller[]; products: Product[]; orders: Order[]; users: UserProfile[]; sellerApplications: SellerProductApplication[]; categories: Category[]; saveProduct: (product: Product) => void; deleteSeller: (id: string) => void; deleteProduct: (id: string) => void; updateOrder: (order: Order) => Promise<void>; toggleSeller: (seller: Seller) => void; addCategory: (name: string) => Promise<void>; deleteCategory: (id: string) => void; notify: (message: string) => void }) {
   const [tab, setTab] = useState<"sellers" | "buyers" | "products" | "orders" | "categories">("sellers");
   const [categoryName, setCategoryName] = useState("");
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  return <main className="page"><section className="role-hero admin-hero"><div><span className="eyebrow">Admin console</span><h1>Marketplace control</h1><p>Manage every seller, product and cash order.</p></div><span className="firebase-state"><i /> {firebaseReady ? "Firebase configured" : "Local mode"}</span></section>
+  return <main className="page"><section className="role-hero admin-hero"><div><span className="eyebrow">Admin console</span><h1>Marketplace control</h1><p>Manage every seller, product and cash order.</p></div></section>
     <section className="stats-grid">{[["Sellers", sellers.length, "Village businesses"], ["Products", products.length, "Live listings"], ["Orders", orders.length, "Cash only"], ["Sales", `R${orders.reduce((sum, order) => sum + order.amount, 0)}`, "Order value"]].map(([label, value, note]) => <article key={label}><span>{label}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
     <div className="admin-tabs"><button className={tab === "sellers" ? "active" : ""} onClick={() => setTab("sellers")}>Sellers</button><button className={tab === "buyers" ? "active" : ""} onClick={() => setTab("buyers")}>Customers</button><button className={tab === "products" ? "active" : ""} onClick={() => setTab("products")}>Products</button><button className={tab === "orders" ? "active" : ""} onClick={() => setTab("orders")}>Orders</button><button className={tab === "categories" ? "active" : ""} onClick={() => setTab("categories")}>Categories</button></div>
-    {tab === "sellers" && <><div className="section-heading"><div><span className="eyebrow">Applications</span><h2>Seller approval requests</h2></div><span>{users.filter((user) => user.role === "seller" && user.sellerStatus === "pending").length} pending</span></div><div className="admin-list">{users.filter((user) => user.role === "seller" && user.sellerStatus === "pending").map((user) => <article key={user.uid}><span className="admin-order-icon"><Icon name="store" /></span><div><h3>{user.shopName}</h3><span>{user.firstName} {user.lastName} · {user.email}</span><small>{user.village} · {user.businessDescription}</small></div><div className="admin-actions"><button onClick={() => void setSellerApproval(user.uid, true).then(() => notify("Seller approved")).catch((error: Error) => notify(`Could not approve seller: ${error.message}`))}><Icon name="check" /> Approve</button><button className="danger" onClick={() => void setSellerApproval(user.uid, false).then(() => notify("Seller application rejected")).catch((error: Error) => notify(`Could not reject seller: ${error.message}`))}>Reject</button></div></article>)}</div><div className="section-heading"><div><span className="eyebrow">Marketplace</span><h2>Seller shops</h2></div></div><div className="admin-list">{sellers.map((seller) => <article key={seller.id}><img src={seller.image} alt="" /><div><h3>{seller.name}</h3><span>{seller.place}</span><small>{products.filter((product) => product.sellerId === seller.id).length} products • {orders.filter((order) => order.sellerId === seller.id).length} orders</small><small className={seller.active ? "seller-active" : "seller-paused"}>{seller.active ? "Active seller" : "Paused seller"}</small></div><div className="admin-actions"><label className="compact-toggle"><input type="checkbox" checked={seller.active} onChange={() => { toggleSeller(seller); notify(seller.active ? "Seller paused" : "Seller activated"); }} /><span>{seller.active ? "Active" : "Paused"}</span></label><button className="danger" onClick={() => { if (window.confirm(`Remove ${seller.name} and all their products?`)) { deleteSeller(seller.id); notify("Seller and their products removed"); } }}><Icon name="trash" /> Remove</button></div></article>)}</div></>}
+    {tab === "sellers" && <>
+      <div className="section-heading">
+        <div><span className="eyebrow">Applications</span><h2>Seller approval requests</h2></div>
+        <span>{users.filter((user) => user.role === "seller" && user.sellerStatus === "pending").length} pending</span>
+      </div>
+      <div className="admin-list">
+        {users.filter((user) => user.role === "seller" && user.sellerStatus === "pending").map((user) => (
+          <article key={user.uid}>
+            <span className="admin-order-icon"><Icon name="store" /></span>
+            <div>
+              <h3>{user.shopName}</h3>
+              <span>{user.firstName} {user.lastName} · {user.email}</span>
+              <small>{user.village} · {user.businessDescription}</small>
+              <div className="seller-application-products">
+                <strong>Submitted products</strong>
+                {sellerApplications.filter((product) => product.sellerId === user.uid).map((product) => (
+                  <div className="seller-application-product" key={product.id}>
+                    <img src={product.image} alt="" />
+                    <span>{product.name} · R{product.price.toFixed(2)} · {product.stock} {product.unit}</span>
+                    <small>{product.category} · {product.detail}</small>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="admin-actions">
+              <button onClick={() => void setSellerApproval(user.uid, true).then(() => notify("Seller approved and submitted products published")).catch((error: Error) => notify(`Could not approve seller: ${error.message}`))}><Icon name="check" /> Approve</button>
+              <button className="danger" onClick={() => void setSellerApproval(user.uid, false).then(() => notify("Seller application rejected")).catch((error: Error) => notify(`Could not reject seller: ${error.message}`))}>Reject</button>
+            </div>
+          </article>
+        ))}
+      </div>
+      <div className="section-heading"><div><span className="eyebrow">Marketplace</span><h2>Seller shops</h2></div></div>
+      <div className="admin-list">{sellers.map((seller) => <article key={seller.id}><img src={seller.image} alt="" /><div><h3>{seller.name}</h3><span>{seller.place}</span><small>{products.filter((product) => product.sellerId === seller.id).length} products · {orders.filter((order) => order.sellerId === seller.id).length} orders</small><small className={seller.active ? "seller-active" : "seller-paused"}>{seller.active ? "Active seller" : "Paused seller"}</small></div><div className="admin-actions"><label className="compact-toggle"><input type="checkbox" checked={seller.active} onChange={() => { toggleSeller(seller); notify(seller.active ? "Seller paused" : "Seller activated"); }} /><span>{seller.active ? "Active" : "Paused"}</span></label><button className="danger" onClick={() => { if (window.confirm(`Remove ${seller.name} and all their products?`)) { deleteSeller(seller.id); notify("Seller and their products removed"); } }}><Icon name="trash" /> Remove</button></div></article>)}</div>
+    </>}
     {tab === "sellers" && <><div className="section-heading"><div><span className="eyebrow">Approved seller accounts</span><h2>Seller access</h2></div></div><div className="admin-list">{users.filter((user) => user.role === "seller" && user.sellerStatus === "approved").map((seller) => <article key={seller.uid}><span className="admin-order-icon"><Icon name="store" /></span><div><h3>{seller.shopName}</h3><span>{seller.firstName} {seller.lastName} · {seller.email}</span><small>{seller.accountStatus} · {seller.village}</small></div><button className={seller.accountStatus === "suspended" ? "" : "danger"} onClick={() => void setAccountSuspended(seller.uid, seller.accountStatus !== "suspended").then(() => notify(seller.accountStatus === "suspended" ? "Seller reactivated" : "Seller suspended")).catch((error: Error) => notify(`Could not update seller: ${error.message}`))}>{seller.accountStatus === "suspended" ? "Reactivate" : "Suspend"}</button></article>)}</div></>}
     {tab === "buyers" && <div className="admin-list">{users.filter((user) => user.role === "customer").map((customer) => <article key={customer.uid}><span className="admin-order-icon"><Icon name="orders" /></span><div><h3>{customer.firstName} {customer.lastName}</h3><span>{customer.email} · {customer.phoneNumber}</span><small>{customer.accountStatus} account · {orders.filter((order) => order.buyerId === customer.uid).length} orders</small></div><button className={customer.accountStatus === "suspended" ? "" : "danger"} onClick={() => void setAccountSuspended(customer.uid, customer.accountStatus !== "suspended").then(() => notify(customer.accountStatus === "suspended" ? "Customer account reactivated" : "Customer account suspended")).catch((error: Error) => notify(`Could not update customer: ${error.message}`))}>{customer.accountStatus === "suspended" ? "Reactivate" : "Suspend"}</button></article>)}</div>}
     {tab === "products" && <><div className="section-heading"><div><span className="eyebrow">Marketplace</span><h2>Product listings</h2></div><span>{products.length} products</span></div><div className="admin-list">{products.map((product) => <article key={product.id}><img src={product.image} alt="" /><div><h3>{product.name}</h3><span>{product.seller}</span><small>R{product.price} • {product.stock} in stock</small></div><div className="admin-actions"><button onClick={() => setEditingProduct(product)}><Icon name="edit" /> Edit</button><button className="danger" onClick={() => { deleteProduct(product.id); notify("Product removed from the market"); }}><Icon name="trash" /> Delete</button></div></article>)}</div></>}
-    {tab === "orders" && <div className="admin-list">{orders.map((order) => <article key={order.id}><span className="admin-order-icon"><Icon name="orders" /></span><div><h3>{order.id} • {order.buyer}</h3><span>{order.items}</span><small>{order.status} • R{order.amount} cash • {order.paid ? "Paid" : "Payment not confirmed"}</small></div><div className="admin-actions"><label className="compact-toggle"><input type="checkbox" checked={Boolean(order.paid)} onChange={(event) => { updateOrder({ ...order, paid: event.target.checked }); notify("Payment status updated"); }} /><span>Paid</span></label><button onClick={() => { updateOrder({ ...order, status: "Completed" }); notify("Order marked completed"); }}><Icon name="check" /> Complete</button></div></article>)}</div>}
+    {tab === "orders" && <div className="admin-list">{orders.map((order) => <article key={order.id}><span className="admin-order-icon"><Icon name="orders" /></span><div><h3>{order.id} • {order.buyer}</h3><span>{order.items}</span><small>{order.status} • R{order.amount.toFixed(2)} cash • {order.paid ? "Paid" : "Payment not confirmed"}</small></div><div className="admin-actions"><label className="compact-toggle"><input type="checkbox" checked={Boolean(order.paid)} onChange={(event) => {
+      const paid = event.target.checked;
+      void updateOrder({ ...order, paid }).then(() => notify("Payment status updated")).catch((error: Error) => notify(`Could not update payment: ${error.message}`));
+    }} /><span>Paid</span></label><button onClick={() => {
+      void updateOrder({ ...order, status: "Completed" }).then(() => notify("Order marked completed")).catch((error: Error) => notify(`Could not complete order: ${error.message}`));
+    }}><Icon name="check" /> Complete</button></div></article>)}</div>}
     {tab === "categories" && <><form className="category-form" onSubmit={(event) => { event.preventDefault(); void addCategory(categoryName).then(() => setCategoryName("")).catch((error: Error) => notify(`Could not add category: ${error.message}`)); }}><label className="auth-field">New category<input required maxLength={40} value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="e.g. Fresh produce" /></label><button className="primary">Add category</button></form><div className="admin-list">{categories.map((category) => <article key={category.id}><div><h3>{category.name}</h3></div><button className="danger" disabled={products.some((product) => product.category === category.name)} onClick={() => deleteCategory(category.id)}>{products.some((product) => product.category === category.name) ? "In use" : "Delete"}</button></article>)}</div></>}
     {editingProduct && <ProductForm product={editingProduct} categories={categories} onClose={() => setEditingProduct(null)} onSave={(product) => { saveProduct(product); setEditingProduct(null); notify("Product update submitted"); }} />}
   </main>;
@@ -323,7 +459,7 @@ export default function App() {
     <Route path="/register" element={<RegisterPage />} />
     <Route path="/complete-profile" element={<CompleteProfilePage />} />
     <Route path="/reset-password" element={<ResetPasswordPage />} />
-    <Route path="/seller-pending" element={<RequireRole roles={["seller"]}><SellerPendingPage /></RequireRole>} />
+    <Route path="/seller-pending" element={<SellerApplicationRoute />} />
     <Route path="/account-unavailable" element={<UnavailableRoute />} />
     <Route path="/terms" element={<PolicyPage kind="terms" />} />
     <Route path="/privacy" element={<PolicyPage kind="privacy" />} />
@@ -370,6 +506,23 @@ function RequireRole({ roles, children }: { roles: UserProfile["role"][]; childr
   return <>{children}</>;
 }
 
+function SellerApplicationRoute() {
+  const { user, profile, loading, error } = useAuth();
+  if (loading) return <AuthLoading />;
+  if (!user) return <Navigate to="/login" replace />;
+  if (!profile) return error ? <AuthProblem message={error} /> : <Navigate to="/complete-profile" replace />;
+  if (profile.role !== "seller") {
+    return <Navigate to={profile.role === "admin" ? "/admin" : "/market"} replace />;
+  }
+  if (profile.accountStatus === "suspended" || profile.accountStatus === "rejected" || profile.sellerStatus === "rejected") {
+    return <Navigate to="/account-unavailable" replace />;
+  }
+  if (profile.sellerStatus === "approved" && profile.accountStatus === "active") {
+    return <Navigate to="/seller" replace />;
+  }
+  return <SellerPendingPage />;
+}
+
 function HomeRedirect() {
   const { user, profile, loading } = useAuth();
   if (loading) return <AuthLoading />;
@@ -393,11 +546,12 @@ function AuthProblem({ message }: { message: string }) {
 
 function MarketplaceApp({ role }: { role: Role }) {
   const { user, profile } = useAuth();
-  const [products, setProducts] = useState<Product[]>(() => firebaseReady ? [] : readCache("molelema-products", initialProducts));
-  const [sellers, setSellers] = useState<Seller[]>(() => firebaseReady ? [] : readCache("molelema-sellers", initialSellers));
+  const [products, setProducts] = useState<Product[]>([]);
+  const [sellers, setSellers] = useState<Seller[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [categories, setCategories] = useState<Category[]>(initialCategories);
   const [users, setUsers] = useState<(UserProfile & { id: string })[]>([]);
+  const [sellerApplications, setSellerApplications] = useState<SellerProductApplication[]>([]);
   const [toast, setToast] = useState("");
 
   function notify(message: string) { setToast(message); window.setTimeout(() => setToast(""), 3200); }
@@ -424,12 +578,12 @@ function MarketplaceApp({ role }: { role: Role }) {
         }
       }, fail),
     ];
-    if (role === "admin") stops.push(watchCollection<UserProfile & { id: string }>("users", setUsers, fail));
+    if (role === "admin") {
+      stops.push(watchCollection<UserProfile & { id: string }>("users", setUsers, fail));
+      stops.push(watchCollection<SellerProductApplication>("seller_application_products", setSellerApplications, fail));
+    }
     return () => stops.forEach((stop) => stop());
   }, [role, user]);
-
-  useEffect(() => localStorage.setItem("molelema-products", JSON.stringify(products)), [products]);
-  useEffect(() => localStorage.setItem("molelema-sellers", JSON.stringify(sellers)), [sellers]);
 
   function saveProduct(product: Product) {
     setProducts((items) => [...items.filter((item) => item.id !== product.id), product]);
@@ -445,9 +599,9 @@ function MarketplaceApp({ role }: { role: Role }) {
     setProducts((items) => items.map((product) => updatedById.get(product.id) ?? product));
     setOrders((items) => [order, ...items]);
   }
-  function updateOrder(order: Order) {
+  async function updateOrder(order: Order): Promise<void> {
+    await saveRecord("orders", order);
     setOrders((items) => items.map((item) => item.id === order.id ? order : item));
-    void saveRecord("orders", order).catch((error: Error) => notify(`Could not update order: ${error.message}`));
   }
   async function addCategory(name: string) {
     const trimmed = name.trim();
@@ -483,17 +637,8 @@ function MarketplaceApp({ role }: { role: Role }) {
   return <div className="app-shell"><Header role={role} />
     {role === "buyer" && <Buyer uid={user?.uid ?? ""} products={products.filter((product) => sellers.some((seller) => seller.id === product.sellerId && seller.active))} orders={orders} createOrder={createOrder} updateOrder={updateOrder} notify={notify} />}
     {role === "seller" && profile && <SellerView uid={user?.uid ?? ""} profile={profile} products={products} orders={orders} categories={categories} saveProduct={saveProduct} deleteProduct={deleteProduct} updateOrder={updateOrder} notify={notify} />}
-    {role === "admin" && <Admin sellers={visibleSellers} products={products} orders={orders} users={users} categories={categories} saveProduct={saveProduct} deleteSeller={deleteSeller} deleteProduct={deleteProduct} updateOrder={updateOrder} addCategory={addCategory} deleteCategory={deleteCategory} toggleSeller={(seller) => { const updated = { ...seller, active: !seller.active }; setSellers((items) => items.map((item) => item.id === seller.id ? updated : item)); void saveRecord("sellers", updated).catch((error: Error) => notify(`Could not update seller: ${error.message}`)); }} notify={notify} />}
+    {role === "admin" && <Admin sellers={visibleSellers} products={products} orders={orders} users={users} sellerApplications={sellerApplications} categories={categories} saveProduct={saveProduct} deleteSeller={deleteSeller} deleteProduct={deleteProduct} updateOrder={updateOrder} addCategory={addCategory} deleteCategory={deleteCategory} toggleSeller={(seller) => { const updated = { ...seller, active: !seller.active }; setSellers((items) => items.map((item) => item.id === seller.id ? updated : item)); void saveRecord("sellers", updated).catch((error: Error) => notify(`Could not update seller: ${error.message}`)); }} notify={notify} />}
     <nav className="mobile-nav"><Link to={role === "buyer" ? "/market" : `/${role}`}><Icon name={role === "buyer" ? "shop" : role === "seller" ? "store" : "shield"} /><span>{role === "buyer" ? "Shop" : role === "seller" ? "Seller" : "Admin"}</span></Link><Link to="/profile"><Icon name="eye" /><span>Profile</span></Link><button onClick={() => void logout().catch((error: Error) => notify(`Could not log out: ${error.message}`))}><Icon name="close" /><span>Log out</span></button></nav>
     {toast && <div className="toast" role="status">{toast}</div>}
   </div>;
-}
-
-function readCache<T>(key: string, fallback: T): T {
-  try {
-    const value = localStorage.getItem(key);
-    return value ? JSON.parse(value) as T : fallback;
-  } catch {
-    return fallback;
-  }
 }

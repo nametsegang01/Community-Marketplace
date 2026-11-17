@@ -13,7 +13,6 @@ logs/
 *.log
 *.pem
 *.key
-firebase-adminsdk-*.json
 *service-account*.json
 credentials/
 .claude-replay.*
@@ -32,4 +31,3 @@ dist/
 .env.local
 .env.*.local
 .DS_Store
-

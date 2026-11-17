@@ -1,59 +1,55 @@
 # Molelema Rise — Community Marketplace
 
-A React, TypeScript, and Vite community marketplace using Firebase Authentication and Cloud Firestore.
+A React, TypeScript, and Vite community marketplace using Supabase Authentication and Postgres.
 
-## Local setup
+## Set up the Supabase project
 
-1. Install Node.js and pnpm, then run `pnpm install`.
-2. In Firebase Console, open the existing project and enable **Authentication → Sign-in method → Email/Password**.
-3. Create or open the project's Cloud Firestore database.
-4. Copy `.env.example` to `.env.local` and fill in the existing Firebase project's web-app configuration. Do not replace the Firebase project or put service-account credentials in this client app.
-5. Publish the rules from [`firestore.rules`](./firestore.rules) in **Firestore Database → Rules** before testing registration.
-6. Run `pnpm dev`; restart Vite after changing `.env.local`.
-7. Run `pnpm build` before deployment.
+The app is configured for the Supabase project whose URL and publishable key are in `.env.example`. The URL must be the project base URL, such as `https://your-project.supabase.co`; do not append `/rest/v1`.
 
-The app does not use Firebase Storage. Product pictures selected from a device are resized and saved as compressed image data in Firestore product documents.
+1. Copy `.env.example` to `.env.local`. The supplied `sb_publishable_...` key is designed for browser use. Never put a Supabase secret or `service_role` key in this app or share one in chat.
+2. In the Supabase Dashboard, open **SQL Editor**, paste the contents of [`supabase/schema.sql`](./supabase/schema.sql), and run it. This creates the tables, signup profile trigger, row-level security policies, marketplace functions, and Realtime publication. If you already ran an earlier version of this setup, run the updated full script again to update seller approval and install the seller product submission flow.
+3. For testing without email verification, open **Authentication → Sign In / Providers → Email** and turn off **Confirm email**. This is a Supabase project setting and cannot be changed by the frontend. New signups can then log in immediately without a confirmation email. Existing unconfirmed accounts may still need to be manually confirmed from **Authentication → Users**. The seller approval function also permits admins to approve unconfirmed test accounts. Re-enable email confirmation and restore the approval check before production. For local testing, add `http://localhost:8443` to **URL Configuration → Redirect URLs** and set the Site URL to the same address.
+4. Install and start the app:
 
-## Authentication and roles
+   ```sh
+   pnpm install
+   pnpm dev
+   ```
 
-- Customers register publicly and receive an active customer profile at `users/{uid}`.
-- Seller registration creates a pending seller application. An administrator must approve it before seller tools are available.
-- There is no public administrator registration. Admin access is granted only by an authorized Firebase Console administrator.
-- Login uses Firebase's browser-local persistence by default. Unchecking “Keep me logged in” uses session persistence.
-- Profile recovery is available at `/complete-profile` if Firebase Authentication created an account but the Firestore profile write failed. The recovery flow reuses the signed-in UID; it does not create another Authentication account.
-- Customers can only read their own orders; approved sellers can only read their own shop orders; administrators can review marketplace records. Firestore rules enforce access as well as frontend route guards.
+5. Register a customer account. The `admin@example.com` below is only a placeholder: replace it with the email for the account you registered. This SQL promotes that account; it does not create an account or password. Sign in with the same email and password you registered with. To bootstrap the first administrator, use the Supabase SQL Editor:
 
-## Securely provision the first administrator
+   ```sql
+   update public.users
+   set role = 'admin', account_status = 'active'
+   where uid = (
+     select id from auth.users where email = 'nametseganglinda@gmail.com'
+   );
+   ```
 
-1. Register a normal customer account in the app and confirm that it can sign in.
-2. In Firebase Console → Authentication, locate that account and copy its UID.
-3. In Firestore Console, open `users/{uid}` and change `role` from `customer` to `admin`; make sure `accountStatus` is `active`. Do not change the document ID or UID.
-4. Sign out and sign back in. The account should now open the admin dashboard.
+   Only a trusted project owner should run this query. Sign out and back in after the change. Never create an administrator from a public registration form.
 
-Only users with Firebase Console access should perform this first role change. Never add an admin creation form, password, or service-account key to the frontend. After bootstrap, the published rules allow admins—but not users—to change roles and seller approvals.
+Run `pnpm build` before deployment.
 
-## Firestore collections
+## Database and access control
 
-- `users/{uid}` — private profile and role/status.
-- `products/{productId}` — public listings and stock.
-- `sellers/{uid}` — approved public shop listings.
-- `orders/{orderId}` — customer/seller order data, restricted by owner and role.
-- `categories/{categoryId}` — public category names; only administrators can change them.
+- `users` stores account profiles and roles; `sellers`, `products`, `categories`, and `orders` hold marketplace data.
+- Row-level security restricts profile and order data. Customers can access their own orders, approved sellers can access their own orders, and admins can manage marketplace records.
+- `place_order` checks stock and creates the order in one database transaction. Never replace it with separate browser writes.
+- Seller review, account suspension, and seller removal are handled by SQL functions that verify the caller is an administrator.
+- Seller applications include up to three product listings and photos. The signup trigger stores them as pending submissions, strips the image payloads from auth metadata, and publishes them only after an administrator approves the seller.
+- Realtime updates are enabled by the schema script. If subscriptions do not update, check **Database → Publications** for `supabase_realtime`.
 
-An administrator should create the first seller/shop and products through a seller application and approval. Existing product/seller documents are not automatically copied or seeded by this authenticated app. Review any existing documents before publishing the rules; older orders without `buyerId` and UID-based `sellerId` will not appear in protected account history.
+The frontend role checks are for user experience; row-level security and database functions are the access-control boundary. The publishable key is public by design, so do not weaken the policies or expose a secret/service-role key.
+
+## Existing data and product images
+
+Existing users, products, sellers, and orders are not copied automatically; plan a deliberate export/import if you need to keep data from an old database. The marketplace does not upload product pictures to Supabase Storage; it compresses each selected picture and stores it in the product row. A Storage bucket can be added later if you want separate image hosting.
 
 ## Testing
 
-1. Register a customer, verify its Authentication user and matching `users/{uid}` profile in Firebase Console, then sign in and place an order.
-2. Register a second account as a seller. Confirm it lands on the pending-approval page and cannot access `/seller`.
-3. Sign in as an administrator and approve the seller in the Sellers tab.
-4. Sign in as that seller, add a product, then sign back in as a customer and place an order.
-5. Confirm stock decreases, the order appears in the buyer's history and seller's incoming orders, and only the owner/admin can read the relevant order.
-6. As buyer, test receipt/payment confirmation; as seller, confirm cash received. Completion stays unavailable until both confirmations are true.
-7. Test forgot-password, logout, persistent and session login, direct-route redirects, and suspended/rejected account handling.
+1. Register a customer and confirm its profile appears in `public.users`.
+2. Create a second account as a seller and add one or more products. The seller approval view shows the application and its submitted listings.
+3. Approve the seller and confirm the submitted products appear in the marketplace, then place a customer order and confirm stock changes and order history updates.
+4. Test receipt/payment confirmation, seller order status, profile edits, password reset, and account suspension.
 
-The frontend checks are for user experience. The accompanying Firestore rules are the authorization boundary. Verify them in the Firebase Rules Playground or Emulator before launch, especially when evolving the document schema.
-
-## Prototype constraints
-
-The project is a marketplace prototype: it has no payment processor, no cloud image storage, and no server-side Functions. Order/payment acknowledgements are self-reported. The demo seller picker has been removed; seller identity comes from the authenticated profile. Protect any production deployment with appropriate Firebase project settings and continue to review the rules as the data model changes.
+For production, configure your deployed site URL and redirect allowlist in Supabase Authentication, review the SQL policies for your requirements, and use a trusted email delivery provider for confirmation and password-reset messages.
