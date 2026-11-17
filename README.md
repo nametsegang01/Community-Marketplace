@@ -1,55 +1,85 @@
-# Molelema Rise — Community Marketplace
+# Molelema Rise Community Marketplace
 
-A React, TypeScript, and Vite community marketplace using Supabase Authentication and Postgres.
+A community marketplace prototype for Molelema Village and nearby Taung communities. Customers can discover local goods, place cash orders, and follow order progress. Sellers can apply to list their products, and administrators can review applications and manage the marketplace.
 
-## Set up the Supabase project
+## What the app includes
 
-The app is configured for the Supabase project whose URL and publishable key are in `.env.example`. The URL must be the project base URL, such as `https://your-project.supabase.co`; do not append `/rest/v1`.
+- **Customers:** browse and search listings, add products to a basket, choose yard pickup or gate delivery, place cash-only orders, and view order details and tracking.
+- **Sellers:** submit a shop application with product details and photos, then manage listings and update order progress after approval.
+- **Administrators:** review seller applications, manage customers, sellers, products and categories, and oversee orders.
+- **Authentication and data:** Supabase Auth and Postgres, with row-level security and database functions for protected marketplace actions.
 
-1. Copy `.env.example` to `.env.local`. The supplied `sb_publishable_...` key is designed for browser use. Never put a Supabase secret or `service_role` key in this app or share one in chat.
-2. In the Supabase Dashboard, open **SQL Editor**, paste the contents of [`supabase/schema.sql`](./supabase/schema.sql), and run it. This creates the tables, signup profile trigger, row-level security policies, marketplace functions, and Realtime publication. If you already ran an earlier version of this setup, run the updated full script again to update seller approval and install the seller product submission flow.
-3. For testing without email verification, open **Authentication → Sign In / Providers → Email** and turn off **Confirm email**. This is a Supabase project setting and cannot be changed by the frontend. New signups can then log in immediately without a confirmation email. Existing unconfirmed accounts may still need to be manually confirmed from **Authentication → Users**. The seller approval function also permits admins to approve unconfirmed test accounts. Re-enable email confirmation and restore the approval check before production. For local testing, add `http://localhost:8443` to **URL Configuration → Redirect URLs** and set the Site URL to the same address.
-4. Install and start the app:
+Seller accounts require administrator approval before seller tools and submitted listings become available. Payments are cash-only; this prototype does not process online payments.
+
+## Technology
+
+- React 19 and TypeScript
+- Vite
+- Supabase Auth, Postgres, and Realtime
+- Tailwind CSS 4 alongside the project’s existing CSS
+
+## Run locally
+
+### Requirements
+
+- Node.js compatible with the installed Vite version
+- pnpm
+- A Supabase project
+
+### Configure Supabase
+
+1. Create a local `.env.local` file in the project root. Add your own Supabase project URL and **publishable** key:
+
+   ```env
+   VITE_SUPABASE_URL=https://YOUR_PROJECT_ID.supabase.co
+   VITE_SUPABASE_PUBLISHABLE_KEY=YOUR_SUPABASE_PUBLISHABLE_KEY
+   ```
+
+   Do not put a Supabase secret or `service_role` key in a `VITE_` variable or commit it to GitHub. Keep `.env.local` private.
+
+2. In your Supabase project’s **SQL Editor**, run [`supabase/schema.sql`](./supabase/schema.sql) to create the tables, row-level security policies, signup trigger, database functions, and Realtime setup.
+3. Add your local app URL to Supabase’s authentication redirect allowlist. The default development URL is `http://localhost:8443`.
+4. For this testing prototype, disable **Confirm email** in the Supabase email provider settings if you want new test accounts to sign in without email verification. This setting is managed in the Supabase Dashboard, not by the app. Before production, enable confirmation and review the seller approval SQL and all access policies.
+5. Install dependencies and start the development server:
 
    ```sh
    pnpm install
    pnpm dev
    ```
 
-5. Register a customer account. The `admin@example.com` below is only a placeholder: replace it with the email for the account you registered. This SQL promotes that account; it does not create an account or password. Sign in with the same email and password you registered with. To bootstrap the first administrator, use the Supabase SQL Editor:
+Vite uses port `8443` by default. To create a production build, run:
 
-   ```sql
-   update public.users
-   set role = 'admin', account_status = 'active'
-   where uid = (
-     select id from auth.users where email = 'nametseganglinda@gmail.com'
-   );
-   ```
+```sh
+pnpm build
+```
 
-   Only a trusted project owner should run this query. Sign out and back in after the change. Never create an administrator from a public registration form.
+## Accounts and roles
 
-Run `pnpm build` before deployment.
+Anyone can register as a customer or submit a seller application. Seller applications and submitted products are reviewed by an administrator. The public registration form does not allow users to create administrator accounts.
 
-## Database and access control
+To bootstrap the first administrator in a new project, a trusted project owner must first create a regular account, then promote that account from the Supabase SQL Editor. Replace the placeholder with that account’s email:
 
-- `users` stores account profiles and roles; `sellers`, `products`, `categories`, and `orders` hold marketplace data.
-- Row-level security restricts profile and order data. Customers can access their own orders, approved sellers can access their own orders, and admins can manage marketplace records.
-- `place_order` checks stock and creates the order in one database transaction. Never replace it with separate browser writes.
-- Seller review, account suspension, and seller removal are handled by SQL functions that verify the caller is an administrator.
-- Seller applications include up to three product listings and photos. The signup trigger stores them as pending submissions, strips the image payloads from auth metadata, and publishes them only after an administrator approves the seller.
-- Realtime updates are enabled by the schema script. If subscriptions do not update, check **Database → Publications** for `supabase_realtime`.
+```sql
+update public.users
+set role = 'admin', account_status = 'active'
+where uid = (
+  select id
+  from auth.users
+  where email = 'YOUR_ADMIN_EMAIL'
+);
+```
 
-The frontend role checks are for user experience; row-level security and database functions are the access-control boundary. The publishable key is public by design, so do not weaken the policies or expose a secret/service-role key.
+Only run this as a trusted Supabase project owner. Sign out and back in after the change. Never give administrator access to an account you do not control.
 
-## Existing data and product images
+## Data and security notes
 
-Existing users, products, sellers, and orders are not copied automatically; plan a deliberate export/import if you need to keep data from an old database. The marketplace does not upload product pictures to Supabase Storage; it compresses each selected picture and stores it in the product row. A Storage bucket can be added later if you want separate image hosting.
+- Supabase row-level security and database functions are the access-control boundary; frontend role checks are not a security boundary.
+- Order placement validates stock and records the order transactionally in the database.
+- Orders are cash-only. The app does not collect, store, or transfer card or online-payment details.
+- Product photos are compressed in the browser and saved with marketplace data; the current prototype does not use Supabase Storage.
+- Existing data is not imported automatically when configuring a new Supabase project.
+- Never commit `.env.local`, passwords, access tokens, secret keys, or service-role keys.
 
-## Testing
+## Before production
 
-1. Register a customer and confirm its profile appears in `public.users`.
-2. Create a second account as a seller and add one or more products. The seller approval view shows the application and its submitted listings.
-3. Approve the seller and confirm the submitted products appear in the marketplace, then place a customer order and confirm stock changes and order history updates.
-4. Test receipt/payment confirmation, seller order status, profile edits, password reset, and account suspension.
-
-For production, configure your deployed site URL and redirect allowlist in Supabase Authentication, review the SQL policies for your requirements, and use a trusted email delivery provider for confirmation and password-reset messages.
+Enable email confirmation, configure the production site URL and redirect allowlist, and review the SQL policies and seller approval rules for the intended production workflow. Configure a trusted email delivery provider and test account recovery, seller approval, order tracking, stock updates, and administrator access.
