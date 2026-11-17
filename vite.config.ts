@@ -33,18 +33,30 @@ react(),
       },
     },
     server: {
-      host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
-      port: parseInt(process.env.PORT || '8443'),
-      strictPort: true,
-      watch: {
-        ignored: [
-          '**/.figma/**',
+  host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
+
+  // Allow Render to access the application
+  allowedHosts: [
+    'molelema-rise-community-marketplace.onrender.com',
+  ],
+
+  port: parseInt(process.env.PORT || '8443'),
+  strictPort: true,
+
+  watch: {
+    ignored: [
+      '**/.figma/**',
 ],
       },
     },
-    preview: {
-      host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
-      port: parseInt(process.env.PORT || '8443'),
+   preview: {
+  host: '0.0.0.0',
+
+  allowedHosts: [
+    'molelema-rise-community-marketplace.onrender.com',
+  ],
+
+  port: parseInt(process.env.PORT || '8443'),
     },
   }
 })
