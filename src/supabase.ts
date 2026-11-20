@@ -373,6 +373,21 @@ export async function placeOrder<T extends { id: string; stock: number }, O exte
   return fromDatabase<T[]>(data);
 }
 
+export async function sendOrderMessage(orderId: string, senderId: string, content: string): Promise<void> {
+  const trimmedContent = content.trim();
+  if (!trimmedContent) throw new Error("Write a message before sending.");
+  if (Array.from(trimmedContent).length > 2000) {
+    throw new Error("Messages must be 2000 characters or fewer.");
+  }
+
+  const { error } = await requireSupabase().from("order_messages").insert({
+    order_id: orderId,
+    sender_id: senderId,
+    content: trimmedContent,
+  });
+  throwOnError(error);
+}
+
 export function watchCollection<T extends { id: string }>(
   name: string,
   onData: (items: T[]) => void,

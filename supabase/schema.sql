@@ -76,6 +76,17 @@ create table if not exists public.orders (
   created_at bigint not null
 );
 
+create table if not exists public.order_messages (
+  id uuid primary key default gen_random_uuid(),
+  order_id text not null references public.orders(id) on delete cascade,
+  sender_id uuid not null references public.users(uid) on delete cascade,
+  content text not null check (char_length(btrim(content)) between 1 and 2000),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists order_messages_order_created_idx
+  on public.order_messages (order_id, created_at);
+
 create or replace function public.is_marketplace_admin()
 returns boolean
 language sql
@@ -190,6 +201,7 @@ alter table public.products enable row level security;
 alter table public.seller_application_products enable row level security;
 alter table public.categories enable row level security;
 alter table public.orders enable row level security;
+alter table public.order_messages enable row level security;
 
 drop policy if exists "users can read own profile or admin can read all" on public.users;
 create policy "users can read own profile or admin can read all"
@@ -338,6 +350,31 @@ with check (
   public.is_marketplace_admin()
   or buyer_id = auth.uid()
   or (seller_id = auth.uid() and public.is_approved_seller())
+);
+
+drop policy if exists "order participants can read chat messages" on public.order_messages;
+create policy "order participants can read chat messages"
+on public.order_messages for select to authenticated
+using (
+  exists (
+    select 1
+    from public.orders as order_record
+    where order_record.id = order_messages.order_id
+      and (order_record.buyer_id = auth.uid() or order_record.seller_id = auth.uid())
+  )
+);
+
+drop policy if exists "order participants can send chat messages" on public.order_messages;
+create policy "order participants can send chat messages"
+on public.order_messages for insert to authenticated
+with check (
+  sender_id = auth.uid()
+  and exists (
+    select 1
+    from public.orders as order_record
+    where order_record.id = order_messages.order_id
+      and (order_record.buyer_id = auth.uid() or order_record.seller_id = auth.uid())
+  )
 );
 
 create or replace function public.protect_order_update()
@@ -612,6 +649,7 @@ $$;
 grant usage on schema public to anon, authenticated;
 grant select on public.sellers, public.products, public.categories to anon, authenticated;
 grant select on public.seller_application_products to authenticated;
+grant select, insert on public.order_messages to authenticated;
 grant select, insert, update on public.users to authenticated;
 revoke update on public.users from authenticated;
 grant update (first_name, last_name, phone_number, updated_at) on public.users to authenticated;
@@ -622,7 +660,7 @@ do $$
 declare
   table_name text;
 begin
-  foreach table_name in array array['users', 'sellers', 'products', 'seller_application_products', 'categories', 'orders']
+  foreach table_name in array array['users', 'sellers', 'products', 'seller_application_products', 'categories', 'orders', 'order_messages']
   loop
     if not exists (
       select 1 from pg_publication_tables

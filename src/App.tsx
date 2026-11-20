@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import {
@@ -17,6 +17,7 @@ import {
   removeSellerRecords,
   logout,
   saveRecord,
+  sendOrderMessage,
   setAccountSuspended,
   setSellerApproval,
   uploadProductImage,
@@ -81,6 +82,14 @@ type OrderDetailLine = {
   unit: string;
 };
 
+type OrderMessage = {
+  id: string;
+  orderId: string;
+  senderId: string;
+  content: string;
+  createdAt: string;
+};
+
 const initialCategories: Category[] = [
   { id: "firewood", name: "Firewood" },
   { id: "fresh-milk", name: "Fresh Milk" },
@@ -129,7 +138,7 @@ function Sheet({ title, onClose, children }: { title: string; onClose: () => voi
   return <div className="scrim" onClick={onClose}><aside className="drawer" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><h2>{title}</h2><button className="icon-button" onClick={onClose}><Icon name="close" /></button></div>{children}</aside></div>;
 }
 
-function OrderTracker({ order, confirmReceived }: { order: Order; confirmReceived: (order: Order) => Promise<void> }) {
+function OrderTracker({ order, confirmReceived, onChat }: { order: Order; confirmReceived: (order: Order) => Promise<void>; onChat: () => void }) {
   const current = Math.max(0, orderSteps.indexOf(order.status));
   const [received, setReceived] = useState(Boolean(order.buyerReceived));
   const [paid, setPaid] = useState<"yes" | "no" | "">(
@@ -144,6 +153,7 @@ function OrderTracker({ order, confirmReceived }: { order: Order; confirmReceive
   const canConfirmReceipt = order.status === "Ready for pickup" || order.status === "Out for delivery" || order.status === "Completed";
   return <div className="tracker">
     <div className="track-summary"><span>{order.id}</span><strong>R{order.amount.toFixed(2)}</strong><p>{order.items}</p><small><Icon name="cash" size={14} /> Cash on {order.delivery.toLowerCase()}</small></div>
+    <button className="chat-open-button wide" onClick={onChat}>Chat with seller</button>
     <div className="timeline">{orderSteps.map((step, index) => <div className={index <= current ? "done" : ""} key={step}><i>{index < current ? <Icon name="check" size={13} /> : index + 1}</i><span><strong>{step}</strong><small>{index === current ? "Current status" : index < current ? "Done" : "Waiting"}</small></span></div>)}</div>
     {canConfirmReceipt && (!order.buyerReceived || !order.buyerPaid) && <div className="receipt-confirmation">
       <strong>Have you received your order?</strong>
@@ -171,6 +181,7 @@ function OrderDialog({
   mode,
   onShowDetails,
   onTrack,
+  onChat,
   onClose,
 }: {
   order: Order;
@@ -178,6 +189,7 @@ function OrderDialog({
   mode: "success" | "details";
   onShowDetails: () => void;
   onTrack: () => void;
+  onChat: () => void;
   onClose: () => void;
 }) {
   return <div className="order-dialog-scrim" onClick={onClose}>
@@ -190,6 +202,7 @@ function OrderDialog({
         <p>Your cash order <strong>{order.id}</strong> has been placed. What would you like to do next?</p>
         <div className="order-dialog-actions">
           <button className="primary wide" onClick={onShowDetails}>View order details</button>
+          <button className="order-dialog-secondary" onClick={onChat}>Chat with seller</button>
           <button className="order-dialog-secondary" onClick={onTrack}>Track order</button>
           <button className="order-dialog-okay" onClick={onClose}>Okay</button>
         </div>
@@ -208,11 +221,82 @@ function OrderDialog({
         <p>Would you like to track this order?</p>
         <div className="order-dialog-actions order-detail-actions">
           <button className="primary wide" onClick={onTrack}>Track this order</button>
+          <button className="order-dialog-secondary" onClick={onChat}>Chat with seller</button>
           <button className="order-dialog-okay" onClick={onClose}>Not now · Okay</button>
         </div>
       </>}
     </section>
   </div>;
+}
+
+function OrderChat({ order, uid, onClose }: { order: Order; uid: string; onClose: () => void }) {
+  const [messages, setMessages] = useState<OrderMessage[]>([]);
+  const [draft, setDraft] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const endOfMessages = useRef<HTMLDivElement>(null);
+  const otherParty = order.buyerId === uid ? order.seller : "Customer";
+
+  useEffect(() => {
+    setMessages([]);
+    setLoading(true);
+    setError("");
+    return watchCollection<OrderMessage>(
+      "order_messages",
+      (items) => {
+        setMessages([...items].sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt)));
+        setError("");
+        setLoading(false);
+      },
+      (reason) => {
+        setError(reason.message);
+        setLoading(false);
+      },
+      { field: "orderId", value: order.id },
+    );
+  }, [order.id]);
+
+  useEffect(() => {
+    endOfMessages.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages]);
+
+  async function submitMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const content = draft.trim();
+    if (!content || sending) return;
+    setSending(true);
+    setError("");
+    try {
+      await sendOrderMessage(order.id, uid, content);
+      setDraft("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not send your message. Please try again.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return <Sheet title={`Chat with ${otherParty}`} onClose={onClose}>
+    <div className="chat-order-reference">{order.id} · {order.seller}</div>
+    <div className="chat-messages" aria-live="polite">
+      {loading && <p className="chat-empty">Loading messages…</p>}
+      {!loading && messages.length === 0 && <p className="chat-empty">Start the conversation about this order.</p>}
+      {messages.map((message) => <article className={`chat-message${message.senderId === uid ? " mine" : ""}`} key={message.id}>
+        <div className="chat-message-meta">
+          <strong>{message.senderId === uid ? "You" : otherParty}</strong>
+          <time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleString()}</time>
+        </div>
+        <p>{message.content}</p>
+      </article>)}
+      <div ref={endOfMessages} />
+    </div>
+    {error && <p className="auth-error" role="alert">{error}</p>}
+    <form className="chat-compose" onSubmit={(event) => void submitMessage(event)}>
+      <label className="auth-field">Message<textarea maxLength={2000} rows={3} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Ask about this order…" /></label>
+      <button className="primary wide" type="submit" disabled={sending || !draft.trim()}>{sending ? "Sending…" : "Send message"}</button>
+    </form>
+  </Sheet>;
 }
 
 function Buyer({ uid, products, orders, createOrder, updateOrder, notify }: { uid: string; products: Product[]; orders: Order[]; createOrder: (order: Order, productUpdates: { productId: string; quantity: number }[]) => Promise<void>; updateOrder: (order: Order) => Promise<void>; notify: (message: string) => void }) {
@@ -223,11 +307,18 @@ function Buyer({ uid, products, orders, createOrder, updateOrder, notify }: { ui
   const [delivery, setDelivery] = useState<"Yard pickup" | "Gate delivery">("Yard pickup");
   const [tracked, setTracked] = useState<Order | null>(null);
   const [orderDialog, setOrderDialog] = useState<{ order: Order; lines: OrderDetailLine[]; mode: "success" | "details" } | null>(null);
+  const [chatOrder, setChatOrder] = useState<Order | null>(null);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
   const categories = ["All", ...new Set(products.map((product) => product.category))];
   const shown = useMemo(() => products.filter((product) => product.stock > 0 && (category === "All" || product.category === category) && `${product.name} ${product.seller}`.toLowerCase().includes(query.toLowerCase())), [products, category, query]);
   const total = cart.reduce((sum, id) => sum + (products.find((product) => product.id === id)?.price ?? 0), delivery === "Gate delivery" ? 15 : 0);
+
+  function openChat(order: Order) {
+    setOrderDialog(null);
+    setSheet(null);
+    setChatOrder(order);
+  }
 
   async function checkout() {
     if (placingOrder) return;
@@ -311,14 +402,16 @@ function Buyer({ uid, products, orders, createOrder, updateOrder, notify }: { ui
       {checkoutError && <p className="auth-error" role="alert" aria-live="assertive">{checkoutError}</p>}
       <button type="button" className="primary wide" disabled={placingOrder || cart.length === 0} onClick={() => void checkout()}>{placingOrder ? "Placing your order..." : "Place cash order"}</button>
     </Sheet>}
-    {sheet === "track" && <Sheet title="Track your order" onClose={() => setSheet(null)}>{tracked ? <OrderTracker order={orders.find((order) => order.id === tracked.id) ?? tracked} confirmReceived={async (order) => {
+    {sheet === "track" && <Sheet title="Track your order" onClose={() => setSheet(null)}>{tracked ? <OrderTracker order={orders.find((order) => order.id === tracked.id) ?? tracked} onChat={() => openChat(orders.find((order) => order.id === tracked.id) ?? tracked)} confirmReceived={async (order) => {
       await updateOrder(order);
       notify(order.buyerPaid ? "Thank you for confirming receipt and payment." : "Receipt confirmed. Please pay the seller before confirming payment.");
     }} /> : <div className="empty"><Icon name="orders" size={36} /><h3>No orders yet</h3><p>Your cash orders will appear here after checkout.</p></div>}</Sheet>}
     {orderDialog && <OrderDialog order={orderDialog.order} lines={orderDialog.lines} mode={orderDialog.mode}
       onShowDetails={() => setOrderDialog((current) => current ? { ...current, mode: "details" } : null)}
       onTrack={() => { setTracked(orderDialog.order); setOrderDialog(null); setSheet("track"); }}
+      onChat={() => openChat(orderDialog.order)}
       onClose={() => setOrderDialog(null)} />}
+    {chatOrder && <OrderChat order={chatOrder} uid={uid} onClose={() => setChatOrder(null)} />}
   </main>;
 }
 
@@ -370,6 +463,7 @@ function ProductForm({ product, categories, onSave, onClose }: { product?: Produ
 
 function SellerView({ uid, profile, products, orders, categories, saveProduct, deleteProduct, updateOrder, notify }: { uid: string; profile: UserProfile; products: Product[]; orders: Order[]; categories: Category[]; saveProduct: (product: Product) => void; deleteProduct: (id: string) => void; updateOrder: (order: Order) => Promise<void>; notify: (message: string) => void }) {
   const [editing, setEditing] = useState<Product | "new" | null>(null);
+  const [chatOrder, setChatOrder] = useState<Order | null>(null);
   const currentSeller: Seller = { id: uid, name: profile.shopName ?? `${profile.firstName} ${profile.lastName}`, place: profile.village ?? "Molelema", image: "/assets/seller-firewood.png", sales: 0, active: profile.sellerStatus === "approved" };
   const mine = products.filter((product) => product.sellerId === currentSeller?.id);
   const myOrders = orders.filter((order) => order.sellerId === currentSeller?.id);
@@ -384,6 +478,7 @@ function SellerView({ uid, profile, products, orders, categories, saveProduct, d
     notify(`Order updated to ${next}`);
   }
   return <main className="page">
+    {chatOrder && <OrderChat order={chatOrder} uid={uid} onClose={() => setChatOrder(null)} />}
     <section className="role-hero"><div><span className="eyebrow">Seller workspace</span><h1>{currentSeller.name}</h1><p><Icon name="pin" size={14} /> {currentSeller.place} • Molelema</p></div><button className="primary" onClick={() => setEditing("new")}><Icon name="plus" /> Add product</button></section>
     <section className="stats-grid">{[["Products", mine.length, "Listed"], ["Stock units", mine.reduce((sum, product) => sum + product.stock, 0), "On hand"], ["New orders", myOrders.filter((order) => order.status === "Order placed").length, "Needs action"], ["Cash due", `R${myOrders.filter((order) => order.status !== "Completed").reduce((sum, order) => sum + order.amount, 0)}`, "At handover"]].map(([label, value, note]) => <article key={label}><span>{label}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
     <div className="dashboard-grid"><section><div className="section-heading"><div><span className="eyebrow">Your catalog</span><h2>Products & stock</h2></div><button className="text-action" onClick={() => setEditing("new")}><Icon name="plus" size={16} /> New</button></div>
@@ -391,9 +486,9 @@ function SellerView({ uid, profile, products, orders, categories, saveProduct, d
     </section><section><div className="section-heading"><div><span className="eyebrow">Cash orders</span><h2>Incoming</h2></div><span>{myOrders.length}</span></div><div className="order-list">{myOrders.map((order) => { const finalStep = order.delivery === "Gate delivery" ? order.status === "Out for delivery" : order.status === "Ready for pickup"; const canComplete = order.paid && order.buyerReceived && order.buyerPaid; const buyerConfirmation = order.buyerPaid ? "Buyer confirmed receipt and payment" : order.buyerReceived ? "Buyer received the order but says they have not paid" : "Waiting for buyer to confirm receipt and payment"; return <article className="order-card" key={order.id}><div className="order-head"><div><span className="order-id">{order.id}</span><span className="status">{order.status}</span><h3>{order.buyer}</h3></div><strong>R{order.amount.toFixed(2)}</strong></div><div className="order-detail"><strong>{order.items}</strong><small><Icon name="cash" size={15} /> Cash • {order.delivery}</small></div><label className="paid-toggle"><input type="checkbox" checked={Boolean(order.paid)} disabled={order.status === "Completed"} onChange={(event) => {
       const paid = event.target.checked;
       void updateOrder({ ...order, paid }).then(() => notify(paid ? "Payment marked as received" : "Payment marked as not received")).catch((error: Error) => notify(`Could not update payment: ${error.message}`));
-    }} /><span><strong>I received the cash payment</strong><small>{buyerConfirmation}</small></span></label><button className="primary wide" disabled={order.status === "Completed" || (finalStep && !canComplete)} onClick={() => {
+    }} /><span><strong>I received the cash payment</strong><small>{buyerConfirmation}</small></span></label><div className="seller-order-actions"><button className="chat-open-button wide" onClick={() => setChatOrder(order)}>Chat with customer</button><button className="primary wide" disabled={order.status === "Completed" || (finalStep && !canComplete)} onClick={() => {
       void advance(order).catch((error: Error) => notify(`Could not update order: ${error.message}`));
-    }}>{order.status === "Completed" ? "Order completed" : finalStep && !canComplete ? "Confirm receipt and payment first" : "Move to next step"}</button></article>; })}</div></section></div>
+    }}>{order.status === "Completed" ? "Order completed" : finalStep && !canComplete ? "Confirm receipt and payment first" : "Move to next step"}</button></div></article>; })}</div></section></div>
     {editing && <ProductForm categories={categories} product={editing === "new" ? { id: `product-${Date.now()}`, sellerId: currentSeller.id, seller: currentSeller.name, name: "", detail: "", place: currentSeller.place, price: 0, stock: 0, unit: "each", category: categories[0]?.name ?? "Other", image: "" } : editing} onClose={() => setEditing(null)} onSave={(product) => { saveProduct({ ...product, sellerId: currentSeller.id, seller: currentSeller.name, place: currentSeller.place }); setEditing(null); notify("Product saved to your catalog"); }} />}
   </main>;
 }
