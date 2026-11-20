@@ -10,3 +10,14 @@ Users
 - **Authentication and data:** Supabase Auth and Postgres, with row-level security and database functions for protected marketplace actions.
 
 Seller accounts require administrator approval before seller tools and submitted listings become available. Payments are cash-only; this prototype does not process online payments.
+
+## Email confirmation setup
+
+In Supabase, set **Authentication → URL Configuration → Site URL** to
+`https://molelema-rise-community-marketplace.onrender.com` and add
+`https://molelema-rise-community-marketplace.onrender.com/login` to the allowed
+redirect URLs. For a custom domain, use that domain instead and set
+`VITE_APP_URL` to its base URL in the hosting provider before rebuilding.
+Keep the confirmation email template linked to Supabase's `{{ .ConfirmationURL }}`
+so the requested redirect is honored.
+Unconfirmed users can request another confirmation email from the login page.

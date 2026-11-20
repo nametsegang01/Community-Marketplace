@@ -2,6 +2,16 @@ import { createClient, type User } from "@supabase/supabase-js";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
 const supabasePublishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim();
+const configuredAppUrl = import.meta.env.VITE_APP_URL?.trim();
+
+function getEmailConfirmationRedirectUrl() {
+  const appUrl = configuredAppUrl || (
+    import.meta.env.PROD
+      ? "https://molelema-rise-community-marketplace.onrender.com"
+      : window.location.origin
+  );
+  return new URL("/login", appUrl).toString();
+}
 
 export const supabaseReady = Boolean(
   supabaseUrl &&
@@ -176,7 +186,7 @@ export async function registerWithEmail(
     email,
     password,
     options: {
-      emailRedirectTo: `${window.location.origin}/login`,
+      emailRedirectTo: getEmailConfirmationRedirectUrl(),
       data: toDatabaseRecord(metadata),
     },
   });
@@ -197,6 +207,17 @@ export async function loginWithEmail(email: string, password: string, remember =
   const { data, error } = await client.auth.signInWithPassword({ email, password });
   throwOnError(error);
   return data;
+}
+
+export async function resendSignupConfirmation(email: string) {
+  const { error } = await requireSupabase().auth.resend({
+    type: "signup",
+    email,
+    options: {
+      emailRedirectTo: getEmailConfirmationRedirectUrl(),
+    },
+  });
+  throwOnError(error);
 }
 
 export async function logout() {
