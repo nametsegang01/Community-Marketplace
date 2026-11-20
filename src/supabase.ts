@@ -5,11 +5,30 @@ const supabasePublishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.tr
 const configuredAppUrl = import.meta.env.VITE_APP_URL?.trim();
 
 function getEmailConfirmationRedirectUrl() {
-  const appUrl = configuredAppUrl || (
-    import.meta.env.PROD
-      ? "https://molelema-rise-community-marketplace.onrender.com"
-      : window.location.origin
-  );
+  if (!configuredAppUrl) {
+    throw new Error("Set VITE_APP_URL to your deployed HTTPS app URL before creating accounts.");
+  }
+
+  let appUrl: URL;
+  try {
+    appUrl = new URL(configuredAppUrl);
+  } catch {
+    throw new Error("VITE_APP_URL must be a valid HTTPS URL.");
+  }
+
+  const hostname = appUrl.hostname.toLowerCase();
+  if (
+    appUrl.protocol !== "https:" ||
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    hostname === "[::1]" ||
+    hostname === "::1"
+  ) {
+    throw new Error("VITE_APP_URL must be your deployed HTTPS app URL, not a localhost address.");
+  }
+
   return new URL("/login", appUrl).toString();
 }
 
@@ -207,17 +226,6 @@ export async function loginWithEmail(email: string, password: string, remember =
   const { data, error } = await client.auth.signInWithPassword({ email, password });
   throwOnError(error);
   return data;
-}
-
-export async function resendSignupConfirmation(email: string) {
-  const { error } = await requireSupabase().auth.resend({
-    type: "signup",
-    email,
-    options: {
-      emailRedirectTo: getEmailConfirmationRedirectUrl(),
-    },
-  });
-  throwOnError(error);
 }
 
 export async function logout() {

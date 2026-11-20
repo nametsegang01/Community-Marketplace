@@ -7,7 +7,6 @@ import {
   loginWithEmail,
   logout,
   registerWithEmail,
-  resendSignupConfirmation,
   requestPasswordReset,
   updateOwnUserProfile,
   uploadProductImage,
@@ -148,8 +147,6 @@ export function LoginPage() {
   const [remember, setRemember] = useState(true);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [resendMessage, setResendMessage] = useState("");
-  const [resending, setResending] = useState(false);
 
   useEffect(() => {
     if (!loading && profile) navigate(routeForProfile(profile), { replace: true });
@@ -160,7 +157,6 @@ export function LoginPage() {
     event.preventDefault();
     setBusy(true);
     setMessage("");
-    setResendMessage("");
     try {
       const credential = await loginWithEmail(email.trim(), password, remember);
       if (!credential.user) throw new Error("Supabase did not return the signed-in account.");
@@ -182,25 +178,6 @@ export function LoginPage() {
     }
   }
 
-  async function resendConfirmation() {
-    const normalizedEmail = email.trim().toLowerCase();
-    if (!normalizedEmail) {
-      setResendMessage("Enter your email address first.");
-      return;
-    }
-    setResending(true);
-    setMessage("");
-    setResendMessage("");
-    try {
-      await resendSignupConfirmation(normalizedEmail);
-      setResendMessage("If this address has an unconfirmed account, a new confirmation email has been sent.");
-    } catch (error) {
-      setResendMessage(friendlyAuthError(error));
-    } finally {
-      setResending(false);
-    }
-  }
-
   return <AuthLayout title="Welcome back" subtitle="Log in to shop and manage your Molelema Rise account.">
     {location.state?.message && <p className="auth-note">{String(location.state.message)}</p>}
     <form className="auth-form" onSubmit={submit}>
@@ -209,10 +186,6 @@ export function LoginPage() {
       <div className="auth-inline"><label><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} /> Keep me logged in</label><Link to="/reset-password">Forgot password?</Link></div>
       {message && <p className="auth-error" role="alert">{message}</p>}
       <button className="auth-submit" disabled={busy || !auth}>{busy ? "Logging in..." : "Log in"}</button>
-      <button className="auth-secondary" type="button" disabled={resending || busy || !auth} onClick={() => void resendConfirmation()}>
-        {resending ? "Sending confirmation email..." : "Resend confirmation email"}
-      </button>
-      {resendMessage && <p className={resendMessage.startsWith("If this address") ? "auth-note" : "auth-error"} role="status">{resendMessage}</p>}
       {!auth && <p className="auth-help">Supabase is not configured. Add your project URL and publishable key to `.env.local`.</p>}
     </form>
     <p className="auth-footer">New to Molelema Rise? <Link to="/register">Create an account</Link></p>
