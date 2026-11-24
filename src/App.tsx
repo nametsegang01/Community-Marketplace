@@ -22,6 +22,7 @@ import {
   setSellerApproval,
   uploadProductImage,
   watchCollection,
+  watchIncomingOrderMessages,
   type SellerProductApplication,
   type UserProfile,
 } from "./supabase";
@@ -100,6 +101,12 @@ const initialCategories: Category[] = [
 ];
 
 const orderSteps = ["Order placed", "Seller confirmed", "Ready for pickup", "Out for delivery", "Completed"];
+function isOrderAtHandover(order: Order) {
+  return order.delivery === "Gate delivery"
+    ? order.status === "Out for delivery"
+    : order.status === "Ready for pickup";
+}
+
 function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, React.ReactNode> = {
     shop: <><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9v11h14V9M9 20v-6h6v6"/></>,
@@ -150,7 +157,7 @@ function OrderTracker({ order, confirmReceived, onChat }: { order: Order; confir
     setReceived(Boolean(order.buyerReceived));
     setPaid(order.buyerPaid === undefined ? "" : order.buyerPaid ? "yes" : "no");
   }, [order.id, order.buyerReceived, order.buyerPaid]);
-  const canConfirmReceipt = order.status === "Ready for pickup" || order.status === "Out for delivery" || order.status === "Completed";
+  const canConfirmReceipt = isOrderAtHandover(order) || order.status === "Completed";
   return <div className="tracker">
     <div className="track-summary"><span>{order.id}</span><strong>R{order.amount.toFixed(2)}</strong><p>{order.items}</p><small><Icon name="cash" size={14} /> Cash on {order.delivery.toLowerCase()}</small></div>
     <button className="chat-open-button wide" onClick={onChat}>Chat with seller</button>
@@ -483,12 +490,40 @@ function SellerView({ uid, profile, products, orders, categories, saveProduct, d
     <section className="stats-grid">{[["Products", mine.length, "Listed"], ["Stock units", mine.reduce((sum, product) => sum + product.stock, 0), "On hand"], ["New orders", myOrders.filter((order) => order.status === "Order placed").length, "Needs action"], ["Cash due", `R${myOrders.filter((order) => order.status !== "Completed").reduce((sum, order) => sum + order.amount, 0)}`, "At handover"]].map(([label, value, note]) => <article key={label}><span>{label}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
     <div className="dashboard-grid"><section><div className="section-heading"><div><span className="eyebrow">Your catalog</span><h2>Products & stock</h2></div><button className="text-action" onClick={() => setEditing("new")}><Icon name="plus" size={16} /> New</button></div>
       <div className="manage-list">{mine.map((product) => <article key={product.id}><img src={product.image} alt="" /><div><h3>{product.name}</h3><span>{product.stock} in stock</span><strong>R{product.price.toFixed(2)} {product.unit}</strong></div><div><button onClick={() => setEditing(product)}><Icon name="edit" size={16} /> Edit</button><button className="danger" onClick={() => deleteProduct(product.id)}><Icon name="trash" size={16} /></button></div></article>)}</div>
-    </section><section><div className="section-heading"><div><span className="eyebrow">Cash orders</span><h2>Incoming</h2></div><span>{myOrders.length}</span></div><div className="order-list">{myOrders.map((order) => { const finalStep = order.delivery === "Gate delivery" ? order.status === "Out for delivery" : order.status === "Ready for pickup"; const canComplete = order.paid && order.buyerReceived && order.buyerPaid; const buyerConfirmation = order.buyerPaid ? "Buyer confirmed receipt and payment" : order.buyerReceived ? "Buyer received the order but says they have not paid" : "Waiting for buyer to confirm receipt and payment"; return <article className="order-card" key={order.id}><div className="order-head"><div><span className="order-id">{order.id}</span><span className="status">{order.status}</span><h3>{order.buyer}</h3></div><strong>R{order.amount.toFixed(2)}</strong></div><div className="order-detail"><strong>{order.items}</strong><small><Icon name="cash" size={15} /> Cash • {order.delivery}</small></div><label className="paid-toggle"><input type="checkbox" checked={Boolean(order.paid)} disabled={order.status === "Completed"} onChange={(event) => {
-      const paid = event.target.checked;
-      void updateOrder({ ...order, paid }).then(() => notify(paid ? "Payment marked as received" : "Payment marked as not received")).catch((error: Error) => notify(`Could not update payment: ${error.message}`));
-    }} /><span><strong>I received the cash payment</strong><small>{buyerConfirmation}</small></span></label><div className="seller-order-actions"><button className="chat-open-button wide" onClick={() => setChatOrder(order)}>Chat with customer</button><button className="primary wide" disabled={order.status === "Completed" || (finalStep && !canComplete)} onClick={() => {
-      void advance(order).catch((error: Error) => notify(`Could not update order: ${error.message}`));
-    }}>{order.status === "Completed" ? "Order completed" : finalStep && !canComplete ? "Confirm receipt and payment first" : "Move to next step"}</button></div></article>; })}</div></section></div>
+    </section><section><div className="section-heading"><div><span className="eyebrow">Cash orders</span><h2>Incoming</h2></div><span>{myOrders.length}</span></div><div className="order-list">{myOrders.map((order) => {
+      const finalStep = isOrderAtHandover(order);
+      const canComplete = order.paid && order.buyerReceived && order.buyerPaid;
+      const buyerConfirmation = order.buyerPaid
+        ? "Buyer confirmed receipt and payment"
+        : order.buyerReceived
+          ? "Buyer received the order but says they have not paid"
+          : "Waiting for buyer to confirm receipt and payment";
+      const paymentHint = finalStep || order.status === "Completed"
+        ? buyerConfirmation
+        : `Available at ${order.delivery === "Gate delivery" ? "delivery" : "pickup"} handover`;
+      const blockedCompletionLabel = !order.paid
+        ? "Confirm cash receipt first"
+        : !order.buyerReceived
+          ? "Waiting for buyer to confirm receipt"
+          : "Waiting for buyer to confirm payment";
+      return <article className="order-card" key={order.id}>
+        <div className="order-head"><div><span className="order-id">{order.id}</span><span className="status">{order.status}</span><h3>{order.buyer}</h3></div><strong>R{order.amount.toFixed(2)}</strong></div>
+        <div className="order-detail"><strong>{order.items}</strong><small><Icon name="cash" size={15} /> Cash • {order.delivery}</small></div>
+        <label className={`paid-toggle${finalStep || order.status === "Completed" ? "" : " payment-locked"}`}>
+          <input type="checkbox" checked={Boolean(order.paid)} disabled={!finalStep || order.status === "Completed"} onChange={(event) => {
+            const paid = event.target.checked;
+            void updateOrder({ ...order, paid }).then(() => notify(paid ? "Payment marked as received" : "Payment marked as not received")).catch((error: Error) => notify(`Could not update payment: ${error.message}`));
+          }} />
+          <span><strong>I received the cash payment</strong><small>{paymentHint}</small></span>
+        </label>
+        <div className="seller-order-actions">
+          <button className="chat-open-button wide" onClick={() => setChatOrder(order)}>Chat with customer</button>
+          <button className="primary wide" disabled={order.status === "Completed" || (finalStep && !canComplete)} onClick={() => {
+            void advance(order).catch((error: Error) => notify(`Could not update order: ${error.message}`));
+          }}>{order.status === "Completed" ? "Order completed" : finalStep && !canComplete ? blockedCompletionLabel : "Move to next step"}</button>
+        </div>
+      </article>;
+    })}</div></section></div>
     {editing && <ProductForm categories={categories} product={editing === "new" ? { id: `product-${Date.now()}`, sellerId: currentSeller.id, seller: currentSeller.name, name: "", detail: "", place: currentSeller.place, price: 0, stock: 0, unit: "each", category: categories[0]?.name ?? "Other", image: "" } : editing} onClose={() => setEditing(null)} onSave={(product) => { saveProduct({ ...product, sellerId: currentSeller.id, seller: currentSeller.name, place: currentSeller.place }); setEditing(null); notify("Product saved to your catalog"); }} />}
   </main>;
 }
@@ -635,8 +670,20 @@ function MarketplaceApp({ role }: { role: Role }) {
   const [users, setUsers] = useState<(UserProfile & { id: string })[]>([]);
   const [sellerApplications, setSellerApplications] = useState<SellerProductApplication[]>([]);
   const [toast, setToast] = useState("");
+  const toastTimer = useRef<number | null>(null);
 
-  function notify(message: string) { setToast(message); window.setTimeout(() => setToast(""), 3200); }
+  function notify(message: string) {
+    setToast(message);
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => {
+      setToast("");
+      toastTimer.current = null;
+    }, 3200);
+  }
+
+  useEffect(() => () => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -663,6 +710,10 @@ function MarketplaceApp({ role }: { role: Role }) {
     if (role === "admin") {
       stops.push(watchCollection<UserProfile & { id: string }>("users", setUsers, fail));
       stops.push(watchCollection<SellerProductApplication>("seller_application_products", setSellerApplications, fail));
+    } else {
+      stops.push(watchIncomingOrderMessages(user.uid, () => {
+        notify(role === "buyer" ? "You have a new message from the seller." : "You have a new message from a customer.");
+      }, fail));
     }
     return () => stops.forEach((stop) => stop());
   }, [role, user]);

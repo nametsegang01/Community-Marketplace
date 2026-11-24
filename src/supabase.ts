@@ -388,6 +388,34 @@ export async function sendOrderMessage(orderId: string, senderId: string, conten
   throwOnError(error);
 }
 
+export function watchIncomingOrderMessages(
+  userId: string,
+  onMessage: (message: { orderId: string; senderId: string }) => void,
+  onError: (error: Error) => void,
+) {
+  const client = requireSupabase();
+  let stopped = false;
+  const channel = client
+    .channel(`incoming-order-messages:${userId}`)
+    .on("postgres_changes", {
+      event: "INSERT",
+      schema: "public",
+      table: "order_messages",
+    }, (payload) => {
+      const message = fromDatabase<{ orderId: string; senderId: string }>(payload.new);
+      if (!stopped && message.senderId !== userId) onMessage(message);
+    })
+    .subscribe((status, error) => {
+      if (!stopped && (status === "CHANNEL_ERROR" || status === "TIMED_OUT")) {
+        onError(error ?? new Error(`Supabase message subscription failed: ${status}`));
+      }
+    });
+  return () => {
+    stopped = true;
+    void client.removeChannel(channel);
+  };
+}
+
 export function watchCollection<T extends { id: string }>(
   name: string,
   onData: (items: T[]) => void,

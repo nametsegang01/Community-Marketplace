@@ -389,12 +389,16 @@ begin
   end if;
 
   if old.buyer_id = auth.uid() then
-    if old.status not in ('Ready for pickup', 'Out for delivery', 'Completed')
+    if not (
+      old.status = 'Completed'
+      or (old.delivery = 'Gate delivery' and old.status = 'Out for delivery')
+      or (old.delivery = 'Yard pickup' and old.status = 'Ready for pickup')
+    )
       or new.buyer_received is distinct from true
       or new.buyer_paid is null
       or (to_jsonb(new) - array['buyer_received', 'buyer_paid'])
         is distinct from (to_jsonb(old) - array['buyer_received', 'buyer_paid']) then
-      raise exception 'Customers can only confirm receipt and cash payment on an eligible order.';
+      raise exception 'Customers can only confirm receipt and cash payment at order handover.';
     end if;
     return new;
   end if;
@@ -402,6 +406,13 @@ begin
   if old.seller_id = auth.uid() and public.is_approved_seller() then
     if (to_jsonb(new) - array['paid', 'status'])
       is distinct from (to_jsonb(old) - array['paid', 'status'])
+      or (
+        new.paid is distinct from old.paid
+        and not (
+          (old.delivery = 'Gate delivery' and old.status = 'Out for delivery')
+          or (old.delivery = 'Yard pickup' and old.status = 'Ready for pickup')
+        )
+      )
       or (new.status is distinct from old.status and new.status not in (
         'Seller confirmed', 'Ready for pickup', 'Out for delivery', 'Completed'
       ))
