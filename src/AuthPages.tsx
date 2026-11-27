@@ -61,12 +61,11 @@ type SellerProductForm = {
   price: string;
   stock: string;
   unit: string;
-  category: string;
   file: File | null;
 };
 
 function emptySellerProduct(): SellerProductForm {
-  return { name: "", detail: "", price: "", stock: "", unit: "each", category: "", file: null };
+  return { name: "", detail: "", price: "", stock: "", unit: "each", file: null };
 }
 
 function SellerProductEditor({
@@ -94,10 +93,7 @@ function SellerProductEditor({
         <label className="auth-field">Price (R)<input required min="0.01" step="0.01" type="number" value={product.price} onChange={(event) => updateProduct(index, { price: event.target.value })} /></label>
         <label className="auth-field">Stock<input required min="1" step="1" type="number" value={product.stock} onChange={(event) => updateProduct(index, { stock: event.target.value })} /></label>
       </div>
-      <div className="auth-form-row">
-        <label className="auth-field">Category<input required value={product.category} onChange={(event) => updateProduct(index, { category: event.target.value })} /></label>
-        <label className="auth-field">Sold by<select value={product.unit} onChange={(event) => updateProduct(index, { unit: event.target.value })}><option>each</option><option>per litre</option><option>per bundle</option><option>per tub</option><option>per bakkie</option></select></label>
-      </div>
+      <label className="auth-field">Unit<select value={product.unit} onChange={(event) => updateProduct(index, { unit: event.target.value })}><option>each</option><option>per litre</option><option>per bundle</option><option>per tub</option><option>per bakkie</option></select></label>
       <label className="auth-field">Product photo<input required type="file" accept="image/*" onChange={(event) => {
         const file = event.target.files?.[0] ?? null;
         if (file && (!file.type.startsWith("image/") || file.size > 5 * 1024 * 1024)) {
@@ -128,7 +124,6 @@ async function prepareSellerProducts(products: SellerProductForm[]): Promise<Sel
       price,
       stock,
       unit: product.unit,
-      category: product.category.trim(),
       image: await uploadProductImage(product.file),
     };
   }));
@@ -202,8 +197,6 @@ export function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [role, setRole] = useState<"customer" | "seller">("customer");
-  const [shopName, setShopName] = useState("");
-  const [businessDescription, setBusinessDescription] = useState("");
   const [village, setVillage] = useState("");
   const [sellerProducts, setSellerProducts] = useState<SellerProductForm[]>([emptySellerProduct()]);
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -229,8 +222,8 @@ export function RegisterPage() {
       setMessage("The passwords do not match.");
       return;
     }
-    if (role === "seller" && (!shopName.trim() || !businessDescription.trim() || !village.trim())) {
-      setMessage("Complete your shop name, business description and village.");
+    if (role === "seller" && !village.trim()) {
+      setMessage("Enter your village or location.");
       return;
     }
     if (role === "seller" && sellerProducts.length === 0) {
@@ -250,8 +243,6 @@ export function RegisterPage() {
       role,
       accountStatus: role === "seller" ? "pending" : "active",
       ...(role === "seller" ? {
-        shopName: shopName.trim(),
-        businessDescription: businessDescription.trim(),
         village: village.trim(),
         sellerStatus: "pending" as const,
       } : {}),
@@ -291,8 +282,6 @@ export function RegisterPage() {
       <fieldset className="account-choice"><legend>Account type</legend><label><input type="radio" name="role" checked={role === "customer"} onChange={() => setRole("customer")} /> Customer</label><label><input type="radio" name="role" checked={role === "seller"} onChange={() => setRole("seller")} /> Seller</label></fieldset>
       {role === "seller" && <div className="seller-fields">
         <p>Verify your email after registering. You can then log in to see when an administrator approves your products.</p>
-        <label className="auth-field">Shop or business name<input required value={shopName} onChange={(event) => setShopName(event.target.value)} /></label>
-        <label className="auth-field">Business description<textarea required rows={3} value={businessDescription} onChange={(event) => setBusinessDescription(event.target.value)} /></label>
         <label className="auth-field">Village or location<input required value={village} onChange={(event) => setVillage(event.target.value)} /></label>
         <SellerProductEditor products={sellerProducts} onChange={setSellerProducts} onError={setMessage} />
       </div>}
@@ -314,8 +303,6 @@ export function CompleteProfilePage() {
   const [lastName, setLastName] = useState(draft?.lastName ?? "");
   const [phoneNumber, setPhoneNumber] = useState(draft?.phoneNumber ?? "");
   const [role, setRole] = useState<"customer" | "seller">(draft?.role === "seller" ? "seller" : "customer");
-  const [shopName, setShopName] = useState(draft?.shopName ?? "");
-  const [businessDescription, setBusinessDescription] = useState(draft?.businessDescription ?? "");
   const [village, setVillage] = useState(draft?.village ?? "");
   const [sellerProducts, setSellerProducts] = useState<SellerProductForm[]>([emptySellerProduct()]);
   const [termsAccepted, setTermsAccepted] = useState(Boolean(draft?.termsAccepted));
@@ -336,8 +323,8 @@ export function CompleteProfilePage() {
       setMessage("Enter a valid South African phone number.");
       return;
     }
-    if (role === "seller" && (!shopName.trim() || !businessDescription.trim() || !village.trim())) {
-      setMessage("Complete your shop name, business description and village.");
+    if (role === "seller" && !village.trim()) {
+      setMessage("Enter your village or location.");
       return;
     }
     if (!termsAccepted) {
@@ -355,7 +342,7 @@ export function CompleteProfilePage() {
         phoneNumber: digits.startsWith("+27") ? digits : `+27${digits.slice(1)}`,
         role,
         accountStatus: role === "seller" ? "pending" : "active",
-        ...(role === "seller" ? { shopName: shopName.trim(), businessDescription: businessDescription.trim(), village: village.trim(), sellerStatus: "pending" as const } : {}),
+        ...(role === "seller" ? { village: village.trim(), sellerStatus: "pending" as const } : {}),
       }, applicationProducts);
       await reloadProfile();
       navigate(role === "seller" ? "/seller-pending" : "/market", { replace: true });
@@ -374,7 +361,7 @@ export function CompleteProfilePage() {
       <div className="auth-form-row"><label className="auth-field">First name<input required value={firstName} onChange={(event) => setFirstName(event.target.value)} /></label><label className="auth-field">Last name<input required value={lastName} onChange={(event) => setLastName(event.target.value)} /></label></div>
       <label className="auth-field">Phone number<input required type="tel" value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} /></label>
       <fieldset className="account-choice"><legend>Account type</legend><label><input type="radio" name="recovery-role" checked={role === "customer"} onChange={() => setRole("customer")} /> Customer</label><label><input type="radio" name="recovery-role" checked={role === "seller"} onChange={() => setRole("seller")} /> Seller</label></fieldset>
-      {role === "seller" && <><label className="auth-field">Shop or business name<input required value={shopName} onChange={(event) => setShopName(event.target.value)} /></label><label className="auth-field">Business description<textarea required rows={3} value={businessDescription} onChange={(event) => setBusinessDescription(event.target.value)} /></label><label className="auth-field">Village or location<input required value={village} onChange={(event) => setVillage(event.target.value)} /></label><SellerProductEditor products={sellerProducts} onChange={setSellerProducts} onError={setMessage} /></>}
+      {role === "seller" && <><label className="auth-field">Village or location<input required value={village} onChange={(event) => setVillage(event.target.value)} /></label><SellerProductEditor products={sellerProducts} onChange={setSellerProducts} onError={setMessage} /></>}
       <label className="terms-check"><input required type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} /> I accept the <a href="/terms" target="_blank" rel="noreferrer">Terms</a> and <a href="/privacy" target="_blank" rel="noreferrer">Privacy Policy</a>.</label>
       {message && <p className="auth-error" role="alert">{message}</p>}
       <button className="auth-submit" disabled={busy}>{busy ? "Saving profile..." : "Save profile"}</button>

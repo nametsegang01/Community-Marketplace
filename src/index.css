@@ -478,3 +478,17 @@ button:focus-visible,input:focus-visible,select:focus-visible { outline:3px soli
 .chat-compose textarea { display:block; width:100%; min-height:82px; margin-top:6px; padding:11px; color:var(--ink); background:#fff; border:1px solid var(--line); border-radius:4px; resize:vertical; font:inherit; }
 .chat-compose textarea:focus { outline:2px solid #416149; outline-offset:1px; }
 .seller-order-actions { display:grid; gap:8px; margin-top:10px; }
+.history-actions { display:flex; align-items:center; gap:8px; }
+.history-actions .chat-icon-button { display:grid; place-items:center; width:44px; min-width:44px; padding:8px; }
+.seller-order-actions { display:flex; align-items:stretch; }
+.seller-order-actions > button { flex:1; min-width:0; }
+.seller-order-actions .wide { width:auto; }
+.product-category { color:#426147; font-family:"Plus Jakarta Sans:Bold"; font-size:12px; letter-spacing:.06em; text-transform:uppercase; }
+.application-category { grid-column:2; display:grid; gap:4px; color:var(--primary-dark); font-size:12px; font-weight:700; }
+.application-category select { width:100%; min-width:0; padding:8px; border:1px solid var(--line); border-radius:4px; background:#fff; color:var(--ink); }
+.seller-application-product img { grid-row:span 3; }
+@media(max-width:600px) {
+  .history-actions { gap:5px; }
+  .history-actions .chat-icon-button { width:42px; min-width:42px; padding:7px; }
+  .seller-order-actions { flex-direction:column; }
+}

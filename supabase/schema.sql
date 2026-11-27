@@ -7,16 +7,23 @@ create table if not exists public.users (
   role text not null check (role in ('customer', 'seller', 'admin')),
   account_status text not null check (account_status in ('active', 'pending', 'suspended', 'rejected')),
   seller_status text check (seller_status in ('pending', 'approved', 'rejected')),
-  shop_name text,
-  business_description text,
   village text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   terms_accepted_at timestamptz not null default now(),
-  check (
-    (role = 'seller' and seller_status is not null and shop_name is not null and business_description is not null and village is not null)
+  constraint users_seller_profile_check check (
+    (role = 'seller' and seller_status is not null and village is not null)
     or (role <> 'seller' and seller_status is null)
   )
+);
+
+alter table public.users drop constraint if exists users_check;
+alter table public.users drop constraint if exists users_seller_profile_check;
+alter table public.users drop column if exists shop_name;
+alter table public.users drop column if exists business_description;
+alter table public.users add constraint users_seller_profile_check check (
+  (role = 'seller' and seller_status is not null and village is not null)
+  or (role <> 'seller' and seller_status is null)
 );
 
 create table if not exists public.sellers (
@@ -28,19 +35,26 @@ create table if not exists public.sellers (
   active boolean not null default true
 );
 
+update public.sellers as seller
+set name = concat_ws(' ', profile.first_name, profile.last_name)
+from public.users as profile
+where profile.uid = seller.id
+  and profile.role = 'seller';
+
 create table if not exists public.products (
   id text primary key,
   seller_id uuid not null references public.users(uid),
-  seller text not null,
   name text not null,
   detail text not null default '',
   place text not null default '',
   price numeric(12, 2) not null check (price >= 0),
   stock integer not null check (stock >= 0),
   unit text not null,
-  category text not null,
+  category text,
   image text not null default ''
 );
+
+alter table public.products drop column if exists seller;
 
 create table if not exists public.seller_application_products (
   id uuid primary key default gen_random_uuid(),
@@ -50,9 +64,10 @@ create table if not exists public.seller_application_products (
   price numeric(12, 2) not null check (price > 0),
   stock integer not null check (stock > 0),
   unit text not null,
-  category text not null,
   image text not null
 );
+
+alter table public.seller_application_products drop column if exists category;
 
 create table if not exists public.categories (
   id text primary key,
@@ -120,6 +135,24 @@ as $$
   );
 $$;
 
+create or replace function public.protect_product_category()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+begin
+  if public.is_marketplace_admin() or auth.role() = 'service_role' then
+    return new;
+  end if;
+  if (tg_op = 'INSERT' and new.category is not null)
+    or (tg_op = 'UPDATE' and new.category is distinct from old.category) then
+    raise exception 'Only an administrator can assign product categories.';
+  end if;
+  return new;
+end;
+$$;
+
 create or replace function public.create_marketplace_profile()
 returns trigger
 language plpgsql
@@ -140,7 +173,7 @@ begin
 
   insert into public.users (
     uid, first_name, last_name, email, phone_number, role, account_status,
-    seller_status, shop_name, business_description, village
+    seller_status, village
   )
   values (
     new.id,
@@ -151,15 +184,13 @@ begin
     profile_role,
     case when profile_role = 'seller' then 'pending' else 'active' end,
     case when profile_role = 'seller' then 'pending' else null end,
-    case when profile_role = 'seller' then coalesce(metadata ->> 'shop_name', '') else null end,
-    case when profile_role = 'seller' then coalesce(metadata ->> 'business_description', '') else null end,
     case when profile_role = 'seller' then coalesce(metadata ->> 'village', '') else null end
   )
   on conflict (uid) do nothing;
 
   if profile_role = 'seller' then
     insert into public.seller_application_products (
-      seller_id, name, detail, price, stock, unit, category, image
+      seller_id, name, detail, price, stock, unit, image
     )
     select
       new.id,
@@ -168,14 +199,12 @@ begin
       (product ->> 'price')::numeric,
       (product ->> 'stock')::integer,
       product ->> 'unit',
-      product ->> 'category',
       product ->> 'image'
     from jsonb_array_elements(metadata -> 'application_products') as product
     where jsonb_typeof(product) = 'object'
       and coalesce(product ->> 'name', '') <> ''
       and coalesce(product ->> 'detail', '') <> ''
       and coalesce(product ->> 'unit', '') <> ''
-      and coalesce(product ->> 'category', '') <> ''
       and coalesce(product ->> 'image', '') <> '';
     get diagnostics inserted_products = row_count;
     if inserted_products <> jsonb_array_length(metadata -> 'application_products') then
@@ -262,7 +291,7 @@ begin
 
   insert into public.users (
     uid, first_name, last_name, email, phone_number, role, account_status,
-    seller_status, shop_name, business_description, village
+    seller_status, village
   )
   values (
     auth.uid(),
@@ -273,8 +302,6 @@ begin
     'seller',
     'pending',
     'pending',
-    coalesce(p_profile ->> 'shop_name', ''),
-    coalesce(p_profile ->> 'business_description', ''),
     coalesce(p_profile ->> 'village', '')
   )
   on conflict (uid) do nothing;
@@ -284,7 +311,7 @@ begin
   end if;
 
   insert into public.seller_application_products (
-    seller_id, name, detail, price, stock, unit, category, image
+    seller_id, name, detail, price, stock, unit, image
   )
   select
     auth.uid(),
@@ -293,14 +320,12 @@ begin
     (product ->> 'price')::numeric,
     (product ->> 'stock')::integer,
     product ->> 'unit',
-    product ->> 'category',
     product ->> 'image'
   from jsonb_array_elements(p_products) as product
   where jsonb_typeof(product) = 'object'
     and coalesce(product ->> 'name', '') <> ''
     and coalesce(product ->> 'detail', '') <> ''
     and coalesce(product ->> 'unit', '') <> ''
-    and coalesce(product ->> 'category', '') <> ''
     and coalesce(product ->> 'image', '') <> '';
   get diagnostics inserted_products = row_count;
   if inserted_products <> jsonb_array_length(p_products) then
@@ -318,6 +343,11 @@ create policy "approved sellers and admins manage products"
 on public.products for all to authenticated
 using (public.is_marketplace_admin() or (seller_id = auth.uid() and public.is_approved_seller()))
 with check (public.is_marketplace_admin() or (seller_id = auth.uid() and public.is_approved_seller()));
+
+drop trigger if exists protect_product_category_before_write on public.products;
+create trigger protect_product_category_before_write
+before insert or update on public.products
+for each row execute function public.protect_product_category();
 
 drop policy if exists "anyone can read categories" on public.categories;
 create policy "anyone can read categories"
@@ -435,7 +465,12 @@ create trigger protect_order_update_before_write
 before update on public.orders
 for each row execute function public.protect_order_update();
 
-create or replace function public.review_seller_application(p_uid uuid, p_approved boolean)
+drop function if exists public.review_seller_application(uuid, boolean);
+create or replace function public.review_seller_application(
+  p_uid uuid,
+  p_approved boolean,
+  p_categories jsonb
+)
 returns void
 language plpgsql
 security definer
@@ -451,6 +486,30 @@ begin
   if not found or application.role <> 'seller' or application.seller_status <> 'pending' then
     raise exception 'This seller application is no longer pending.';
   end if;
+  if p_approved then
+    if jsonb_typeof(p_categories) is distinct from 'array' then
+      raise exception 'Choose a category for every submitted product.';
+    end if;
+    if jsonb_array_length(p_categories) <> (
+      select count(*) from public.seller_application_products where seller_id = p_uid
+    ) then
+      raise exception 'Choose a category for every submitted product.';
+    end if;
+    if exists (
+      select 1
+      from public.seller_application_products as submitted
+      where submitted.seller_id = p_uid
+        and not exists (
+          select 1
+          from jsonb_array_elements(p_categories) as assignment
+          join public.categories as category
+            on category.name = (assignment.value ->> 'category')
+          where (assignment.value ->> 'product_id') = submitted.id::text
+        )
+    ) then
+      raise exception 'Each submitted product must use an existing category.';
+    end if;
+  end if;
   update public.users
   set seller_status = case when p_approved then 'approved' else 'rejected' end,
       account_status = case when p_approved then 'active' else 'rejected' end,
@@ -464,23 +523,26 @@ begin
       raise exception 'This seller application has no submitted products.';
     end if;
     insert into public.sellers (id, name, place, image, sales, active)
-    values (p_uid, application.shop_name, application.village, '/assets/seller-firewood.png', 0, true)
+    values (p_uid, concat_ws(' ', application.first_name, application.last_name), application.village, '/assets/seller-firewood.png', 0, true)
     on conflict (id) do update
       set name = excluded.name, place = excluded.place, active = true;
     insert into public.products (
-      id, seller_id, seller, name, detail, place, price, stock, unit, category, image
+      id, seller_id, name, detail, place, price, stock, unit, category, image
     )
     select
       gen_random_uuid()::text,
       p_uid,
-      application.shop_name,
       submitted.name,
       submitted.detail,
       application.village,
       submitted.price,
       submitted.stock,
       submitted.unit,
-      submitted.category,
+      (
+        select assignment.value ->> 'category'
+        from jsonb_array_elements(p_categories) as assignment
+        where (assignment.value ->> 'product_id') = submitted.id::text
+      ),
       submitted.image
     from public.seller_application_products as submitted
     where submitted.seller_id = p_uid;
@@ -685,7 +747,7 @@ begin
 end;
 $$;
 
-grant execute on function public.review_seller_application(uuid, boolean) to authenticated;
+grant execute on function public.review_seller_application(uuid, boolean, jsonb) to authenticated;
 grant execute on function public.complete_seller_application(jsonb, jsonb) to authenticated;
 grant execute on function public.set_account_suspended(uuid, boolean) to authenticated;
 grant execute on function public.remove_seller_records(uuid) to authenticated;

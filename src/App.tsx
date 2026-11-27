@@ -31,7 +31,7 @@ type Role = "buyer" | "seller" | "admin";
 type IconName =
   | "shop" | "store" | "shield" | "basket" | "search" | "pin" | "check"
   | "plus" | "phone" | "truck" | "edit" | "bell" | "close" | "minus"
-  | "eye" | "box" | "cash" | "clock" | "trash" | "orders";
+  | "eye" | "box" | "cash" | "clock" | "trash" | "orders" | "chat";
 
 type Seller = {
   id: string;
@@ -45,14 +45,13 @@ type Seller = {
 type Product = {
   id: string;
   sellerId: string;
-  seller: string;
   name: string;
   detail: string;
   place: string;
   price: number;
   stock: number;
   unit: string;
-  category: string;
+  category: string | null;
   image: string;
 };
 
@@ -129,6 +128,7 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
     clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
     trash: <><path d="M4 7h16M9 7V4h6v3m3 0-1 14H7L6 7M10 11v6m4-6v6"/></>,
     orders: <><path d="M6 3h12v18H6zM9 7h6M9 11h6M9 15h4"/></>,
+    chat: <><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-5.5A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 11h.01M12 11h.01M16 11h.01"/></>,
   };
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 }
@@ -306,7 +306,7 @@ function OrderChat({ order, uid, onClose }: { order: Order; uid: string; onClose
   </Sheet>;
 }
 
-function Buyer({ uid, products, orders, createOrder, updateOrder, notify }: { uid: string; products: Product[]; orders: Order[]; createOrder: (order: Order, productUpdates: { productId: string; quantity: number }[]) => Promise<void>; updateOrder: (order: Order) => Promise<void>; notify: (message: string) => void }) {
+function Buyer({ uid, products, sellers, orders, createOrder, updateOrder, notify }: { uid: string; products: Product[]; sellers: Seller[]; orders: Order[]; createOrder: (order: Order, productUpdates: { productId: string; quantity: number }[]) => Promise<void>; updateOrder: (order: Order) => Promise<void>; notify: (message: string) => void }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
   const [cart, setCart] = useState<string[]>([]);
@@ -317,8 +317,8 @@ function Buyer({ uid, products, orders, createOrder, updateOrder, notify }: { ui
   const [chatOrder, setChatOrder] = useState<Order | null>(null);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
-  const categories = ["All", ...new Set(products.map((product) => product.category))];
-  const shown = useMemo(() => products.filter((product) => product.stock > 0 && (category === "All" || product.category === category) && `${product.name} ${product.seller}`.toLowerCase().includes(query.toLowerCase())), [products, category, query]);
+  const categories = ["All", ...new Set(products.map((product) => product.category).filter((value): value is string => Boolean(value)))];
+  const shown = useMemo(() => products.filter((product) => product.stock > 0 && (category === "All" || product.category === category) && `${product.name} ${product.detail}`.toLowerCase().includes(query.toLowerCase())), [products, category, query]);
   const total = cart.reduce((sum, id) => sum + (products.find((product) => product.id === id)?.price ?? 0), delivery === "Gate delivery" ? 15 : 0);
 
   function openChat(order: Order) {
@@ -365,7 +365,7 @@ function Buyer({ uid, products, orders, createOrder, updateOrder, notify }: { ui
       setCheckoutError("Your basket is empty. Add a product before checking out.");
       return;
     }
-    const order: Order = { id: `MLM-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`, buyerId: uid, buyer: "You", sellerId: first.sellerId, seller: first.seller, items: lines.join(", "), productLines: productUpdates, amount: Number(total.toFixed(2)), delivery, status: "Order placed", paid: false, createdAt: Date.now() };
+    const order: Order = { id: `MLM-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`, buyerId: uid, buyer: "You", sellerId: first.sellerId, seller: sellers.find((seller) => seller.id === first.sellerId)?.name ?? "Seller", items: lines.join(", "), productLines: productUpdates, amount: Number(total.toFixed(2)), delivery, status: "Order placed", paid: false, createdAt: Date.now() };
     const detailLines = productUpdates.map(({ productId, quantity }) => {
       const product = products.find((item) => item.id === productId);
       return product ? { productId, name: product.name, quantity, unitPrice: product.price, unit: product.unit } : null;
@@ -394,15 +394,15 @@ function Buyer({ uid, products, orders, createOrder, updateOrder, notify }: { ui
     <div className="section-heading"><div><span className="eyebrow">Village market</span><h2>Available now</h2></div><span>{shown.length} products</span></div>
     <section className="product-grid">{shown.map((product) => <article className="product-card" key={product.id}>
       <div className="product-image"><img src={product.image} alt={product.name} /><span>{product.stock} left</span></div>
-      <div className="product-body"><span className="seller-name">{product.seller}</span><h3>{product.name}</h3><p>{product.detail}</p><div className="product-footer"><div><strong>R{product.price.toFixed(2)}</strong><small>{product.unit}</small></div><button disabled={cart.filter((id) => id === product.id).length >= product.stock} onClick={() => { const currentSellerIds = new Set(cart.map((id) => products.find((item) => item.id === id)?.sellerId).filter(Boolean)); if (currentSellerIds.size && !currentSellerIds.has(product.sellerId)) { notify("Please place one seller's order at a time. Finish your current basket first."); return; } setCart((items) => [...items, product.id]); notify("Added to basket"); }}><Icon name="plus" /> {cart.filter((id) => id === product.id).length >= product.stock ? "Max in basket" : "Add"}</button></div></div>
+      <div className="product-body">{product.category && <span className="product-category">{product.category}</span>}<h3>{product.name}</h3><p>{product.detail}</p><div className="product-footer"><div><strong>R{product.price.toFixed(2)}</strong><small>{product.unit}</small></div><button disabled={cart.filter((id) => id === product.id).length >= product.stock} onClick={() => { const currentSellerIds = new Set(cart.map((id) => products.find((item) => item.id === id)?.sellerId).filter(Boolean)); if (currentSellerIds.size && !currentSellerIds.has(product.sellerId)) { notify("Please place one seller's order at a time. Finish your current basket first."); return; } setCart((items) => [...items, product.id]); notify("Added to basket"); }}><Icon name="plus" /> {cart.filter((id) => id === product.id).length >= product.stock ? "Max in basket" : "Add"}</button></div></div>
     </article>)}</section>
     <section className="history-section">
       <div className="section-heading"><div><span className="eyebrow">Your activity</span><h2>Your previous orders</h2></div><span>{orders.filter((order) => order.buyerId === uid).length} orders</span></div>
-      {orders.filter((order) => order.buyerId === uid).length ? <div className="history-list">{orders.filter((order) => order.buyerId === uid).sort((a,b) => b.createdAt-a.createdAt).map((order) => <article className="history-card" key={order.id}><div><span className="order-id">{order.id}</span><span className="status">{order.status}</span><h3>{order.seller}</h3><p>{order.items}</p><small>{new Date(order.createdAt).toLocaleDateString()} · {order.delivery}</small></div><div className="history-side"><strong>R{order.amount.toFixed(2)}</strong><button onClick={() => { setTracked(order); setSheet("track"); }}>View progress</button></div></article>)}</div> : <div className="empty history-empty"><Icon name="orders" size={30} /><h3>Your orders will appear here</h3><p>When you buy from a local seller, you can come back here to check its progress.</p></div>}
+      {orders.filter((order) => order.buyerId === uid).length ? <div className="history-list">{orders.filter((order) => order.buyerId === uid).sort((a,b) => b.createdAt-a.createdAt).map((order) => <article className="history-card" key={order.id}><div><span className="order-id">{order.id}</span><span className="status">{order.status}</span><h3>{order.seller}</h3><p>{order.items}</p><small>{new Date(order.createdAt).toLocaleDateString()} · {order.delivery}</small></div><div className="history-side"><strong>R{order.amount.toFixed(2)}</strong><div className="history-actions"><button onClick={() => { setTracked(order); setSheet("track"); }}>View progress</button><button className="chat-icon-button" aria-label="Chat with seller" title="Chat with seller" onClick={() => openChat(order)}><Icon name="chat" /></button></div></div></article>)}</div> : <div className="empty history-empty"><Icon name="orders" size={30} /><h3>Your orders will appear here</h3><p>When you buy from a local seller, you can come back here to check its progress.</p></div>}
     </section>
     {cart.length > 0 && <button className="floating-cart" onClick={() => setSheet("cart")}><span><b>{cart.length}</b><span>View basket<small>Cash only</small></span></span><strong>R{total.toFixed(2)} <Icon name="basket" /></strong></button>}
     {sheet === "cart" && <Sheet title="Your basket" onClose={() => setSheet(null)}>
-      <div className="cart-items">{products.filter((product) => cart.includes(product.id)).map((product) => { const count = cart.filter((id) => id === product.id).length; return <div className="cart-item" key={product.id}><img src={product.image} alt="" /><div><strong>{product.name}</strong><small>{product.seller} · {product.stock} in stock</small><b>R{(product.price * count).toFixed(2)}</b></div><div className="quantity"><button onClick={() => { setCheckoutError(""); setCart((items) => items.filter((_, index) => index !== items.indexOf(product.id))); }}><Icon name="minus" size={14} /></button><span>{count}</span><button disabled={count >= product.stock} onClick={() => { setCheckoutError(""); setCart((items) => [...items, product.id]); }}><Icon name="plus" size={14} /></button></div></div>; })}</div>
+      <div className="cart-items">{products.filter((product) => cart.includes(product.id)).map((product) => { const count = cart.filter((id) => id === product.id).length; return <div className="cart-item" key={product.id}><img src={product.image} alt="" /><div><strong>{product.name}</strong><small>{product.stock} in stock</small><b>R{(product.price * count).toFixed(2)}</b></div><div className="quantity"><button onClick={() => { setCheckoutError(""); setCart((items) => items.filter((_, index) => index !== items.indexOf(product.id))); }}><Icon name="minus" size={14} /></button><span>{count}</span><button disabled={count >= product.stock} onClick={() => { setCheckoutError(""); setCart((items) => [...items, product.id]); }}><Icon name="plus" size={14} /></button></div></div>; })}</div>
       <div className="delivery-choice"><button className={delivery === "Yard pickup" ? "active" : ""} onClick={() => setDelivery("Yard pickup")}><Icon name="store" /><span>Yard pickup<small>Free</small></span></button><button className={delivery === "Gate delivery" ? "active" : ""} onClick={() => setDelivery("Gate delivery")}><Icon name="truck" /><span>Gate delivery<small>+ R15</small></span></button></div>
       <div className="cash-note"><Icon name="cash" /><span><strong>Cash payment only</strong><small>Pay the seller on collection or delivery. After placing your order, you can track it and confirm payment.</small></span></div>
       <div className="total-row"><span>Total cash due</span><strong>R{total.toFixed(2)}</strong></div>
@@ -422,8 +422,8 @@ function Buyer({ uid, products, orders, createOrder, updateOrder, notify }: { ui
   </main>;
 }
 
-function ProductForm({ product, categories, onSave, onClose }: { product?: Product; categories: Category[]; onSave: (product: Product) => void; onClose: () => void }) {
-  const [form, setForm] = useState<Product>(product ?? { id: `product-${Date.now()}`, sellerId: "motsamai", seller: "Mr Motsamai Firewood", name: "", detail: "", place: "Masakaneng", price: 0, stock: 0, unit: "each", category: "Other", image: "" });
+function ProductForm({ product, categories, canEditCategory = false, onSave, onClose }: { product?: Product; categories: Category[]; canEditCategory?: boolean; onSave: (product: Product) => void; onClose: () => void }) {
+  const [form, setForm] = useState<Product>(product ?? { id: `product-${Date.now()}`, sellerId: "motsamai", name: "", detail: "", place: "Masakaneng", price: 0, stock: 0, unit: "each", category: null, image: "" });
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imageError, setImageError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -448,7 +448,7 @@ function ProductForm({ product, categories, onSave, onClose }: { product?: Produ
     <label>Product name<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
     <label>Description<input required value={form.detail} onChange={(event) => setForm({ ...form, detail: event.target.value })} /></label>
     <div className="form-row"><label>Price (R)<input required min="0" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: Number(event.target.value) })} /></label><label>Stock on hand<input required min="0" type="number" value={form.stock} onChange={(event) => setForm({ ...form, stock: Number(event.target.value) })} /></label></div>
-    <div className="form-row"><label>Category<select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>{categories.map((category) => <option key={category.id}>{category.name}</option>)}</select></label><label>Sold by<select value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })}><option>each</option><option>per litre</option><option>per bundle</option><option>per tub</option><option>per bakkie</option></select></label></div>
+    <div className="form-row">{canEditCategory && <label>Category<select required value={form.category ?? ""} onChange={(event) => setForm({ ...form, category: event.target.value })}><option value="" disabled>Choose a category</option>{categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}</select></label>}<label>Unit<select value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })}><option>each</option><option>per litre</option><option>per bundle</option><option>per tub</option><option>per bakkie</option></select></label></div>
     <label>Product photo<input type="file" accept="image/*" required={!form.image} onChange={(event) => {
       const file = event.target.files?.[0] ?? null;
       if (file && !file.type.startsWith("image/")) {
@@ -471,7 +471,7 @@ function ProductForm({ product, categories, onSave, onClose }: { product?: Produ
 function SellerView({ uid, profile, products, orders, categories, saveProduct, deleteProduct, updateOrder, notify }: { uid: string; profile: UserProfile; products: Product[]; orders: Order[]; categories: Category[]; saveProduct: (product: Product) => void; deleteProduct: (id: string) => void; updateOrder: (order: Order) => Promise<void>; notify: (message: string) => void }) {
   const [editing, setEditing] = useState<Product | "new" | null>(null);
   const [chatOrder, setChatOrder] = useState<Order | null>(null);
-  const currentSeller: Seller = { id: uid, name: profile.shopName ?? `${profile.firstName} ${profile.lastName}`, place: profile.village ?? "Molelema", image: "/assets/seller-firewood.png", sales: 0, active: profile.sellerStatus === "approved" };
+  const currentSeller: Seller = { id: uid, name: `${profile.firstName} ${profile.lastName}`.trim(), place: profile.village ?? "Molelema", image: "/assets/seller-firewood.png", sales: 0, active: profile.sellerStatus === "approved" };
   const mine = products.filter((product) => product.sellerId === currentSeller?.id);
   const myOrders = orders.filter((order) => order.sellerId === currentSeller?.id);
   async function advance(order: Order) {
@@ -489,7 +489,7 @@ function SellerView({ uid, profile, products, orders, categories, saveProduct, d
     <section className="role-hero"><div><span className="eyebrow">Seller workspace</span><h1>{currentSeller.name}</h1><p><Icon name="pin" size={14} /> {currentSeller.place} • Molelema</p></div><button className="primary" onClick={() => setEditing("new")}><Icon name="plus" /> Add product</button></section>
     <section className="stats-grid">{[["Products", mine.length, "Listed"], ["Stock units", mine.reduce((sum, product) => sum + product.stock, 0), "On hand"], ["New orders", myOrders.filter((order) => order.status === "Order placed").length, "Needs action"], ["Cash due", `R${myOrders.filter((order) => order.status !== "Completed").reduce((sum, order) => sum + order.amount, 0)}`, "At handover"]].map(([label, value, note]) => <article key={label}><span>{label}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
     <div className="dashboard-grid"><section><div className="section-heading"><div><span className="eyebrow">Your catalog</span><h2>Products & stock</h2></div><button className="text-action" onClick={() => setEditing("new")}><Icon name="plus" size={16} /> New</button></div>
-      <div className="manage-list">{mine.map((product) => <article key={product.id}><img src={product.image} alt="" /><div><h3>{product.name}</h3><span>{product.stock} in stock</span><strong>R{product.price.toFixed(2)} {product.unit}</strong></div><div><button onClick={() => setEditing(product)}><Icon name="edit" size={16} /> Edit</button><button className="danger" onClick={() => deleteProduct(product.id)}><Icon name="trash" size={16} /></button></div></article>)}</div>
+      <div className="manage-list">{mine.map((product) => <article key={product.id}><img src={product.image} alt="" /><div><h3>{product.name}</h3><span>{product.stock} in stock · {product.category ?? "Category pending admin assignment"}</span><strong>R{product.price.toFixed(2)} {product.unit}</strong></div><div><button onClick={() => setEditing(product)}><Icon name="edit" size={16} /> Edit</button><button className="danger" onClick={() => deleteProduct(product.id)}><Icon name="trash" size={16} /></button></div></article>)}</div>
     </section><section><div className="section-heading"><div><span className="eyebrow">Cash orders</span><h2>Incoming</h2></div><span>{myOrders.length}</span></div><div className="order-list">{myOrders.map((order) => {
       const finalStep = isOrderAtHandover(order);
       const canComplete = order.paid && order.buyerReceived && order.buyerPaid;
@@ -517,14 +517,14 @@ function SellerView({ uid, profile, products, orders, categories, saveProduct, d
           <span><strong>I received the cash payment</strong><small>{paymentHint}</small></span>
         </label>
         <div className="seller-order-actions">
-          <button className="chat-open-button wide" onClick={() => setChatOrder(order)}>Chat with customer</button>
+          <button className="chat-open-button wide" onClick={() => setChatOrder(order)}><Icon name="chat" /> Chat with customer</button>
           <button className="primary wide" disabled={order.status === "Completed" || (finalStep && !canComplete)} onClick={() => {
             void advance(order).catch((error: Error) => notify(`Could not update order: ${error.message}`));
           }}>{order.status === "Completed" ? "Order completed" : finalStep && !canComplete ? blockedCompletionLabel : "Move to next step"}</button>
         </div>
       </article>;
     })}</div></section></div>
-    {editing && <ProductForm categories={categories} product={editing === "new" ? { id: `product-${Date.now()}`, sellerId: currentSeller.id, seller: currentSeller.name, name: "", detail: "", place: currentSeller.place, price: 0, stock: 0, unit: "each", category: categories[0]?.name ?? "Other", image: "" } : editing} onClose={() => setEditing(null)} onSave={(product) => { saveProduct({ ...product, sellerId: currentSeller.id, seller: currentSeller.name, place: currentSeller.place }); setEditing(null); notify("Product saved to your catalog"); }} />}
+    {editing && <ProductForm categories={categories} product={editing === "new" ? { id: `product-${Date.now()}`, sellerId: currentSeller.id, name: "", detail: "", place: currentSeller.place, price: 0, stock: 0, unit: "each", category: null, image: "" } : editing} onClose={() => setEditing(null)} onSave={(product) => { saveProduct({ ...product, sellerId: currentSeller.id, place: currentSeller.place }); setEditing(null); notify("Product saved to your catalog"); }} />}
   </main>;
 }
 
@@ -532,8 +532,20 @@ function Admin({ sellers, products, orders, users, sellerApplications, categorie
   const [tab, setTab] = useState<"sellers" | "buyers" | "products" | "orders" | "categories">("sellers");
   const [categoryName, setCategoryName] = useState("");
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [productCategories, setProductCategories] = useState<Record<string, string>>({});
+  function approveSeller(userId: string) {
+    const submissions = sellerApplications.filter((product) => product.sellerId === userId);
+    if (!submissions.length || submissions.some((product) => !categories.some((category) => category.name === productCategories[product.id]))) {
+      notify("Choose a category for every submitted product before approving this seller.");
+      return;
+    }
+    const assignments = submissions.map((product) => ({ productId: product.id, category: productCategories[product.id] }));
+    void setSellerApproval(userId, true, assignments)
+      .then(() => notify("Seller approved and submitted products published"))
+      .catch((error: Error) => notify(`Could not approve seller: ${error.message}`));
+  }
   return <main className="page"><section className="role-hero admin-hero"><div><span className="eyebrow">Admin console</span><h1>Marketplace control</h1><p>Manage every seller, product and cash order.</p></div></section>
-    <section className="stats-grid">{[["Sellers", sellers.length, "Village businesses"], ["Products", products.length, "Live listings"], ["Orders", orders.length, "Cash only"], ["Sales", `R${orders.reduce((sum, order) => sum + order.amount, 0)}`, "Order value"]].map(([label, value, note]) => <article key={label}><span>{label}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
+    <section className="stats-grid">{[["Sellers", sellers.length, "Seller accounts"], ["Products", products.length, "Live listings"], ["Orders", orders.length, "Cash only"], ["Sales", `R${orders.reduce((sum, order) => sum + order.amount, 0)}`, "Order value"]].map(([label, value, note]) => <article key={label}><span>{label}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
     <div className="admin-tabs"><button className={tab === "sellers" ? "active" : ""} onClick={() => setTab("sellers")}>Sellers</button><button className={tab === "buyers" ? "active" : ""} onClick={() => setTab("buyers")}>Customers</button><button className={tab === "products" ? "active" : ""} onClick={() => setTab("products")}>Products</button><button className={tab === "orders" ? "active" : ""} onClick={() => setTab("orders")}>Orders</button><button className={tab === "categories" ? "active" : ""} onClick={() => setTab("categories")}>Categories</button></div>
     {tab === "sellers" && <>
       <div className="section-heading">
@@ -545,33 +557,34 @@ function Admin({ sellers, products, orders, users, sellerApplications, categorie
           <article key={user.uid}>
             <span className="admin-order-icon"><Icon name="store" /></span>
             <div>
-              <h3>{user.shopName}</h3>
-              <span>{user.firstName} {user.lastName} · {user.email}</span>
-              <small>{user.village} · {user.businessDescription}</small>
+              <h3>{user.firstName} {user.lastName}</h3>
+              <span>{user.email}</span>
+              <small>{user.village}</small>
               <div className="seller-application-products">
                 <strong>Submitted products</strong>
                 {sellerApplications.filter((product) => product.sellerId === user.uid).map((product) => (
                   <div className="seller-application-product" key={product.id}>
                     <img src={product.image} alt="" />
                     <span>{product.name} · R{product.price.toFixed(2)} · {product.stock} {product.unit}</span>
-                    <small>{product.category} · {product.detail}</small>
+                    <small>{product.detail}</small>
+                    <label className="application-category">Admin category<select required value={productCategories[product.id] ?? ""} onChange={(event) => setProductCategories((current) => ({ ...current, [product.id]: event.target.value }))}><option value="" disabled>Choose a category</option>{categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}</select></label>
                   </div>
                 ))}
               </div>
             </div>
             <div className="admin-actions">
-              <button onClick={() => void setSellerApproval(user.uid, true).then(() => notify("Seller approved and submitted products published")).catch((error: Error) => notify(`Could not approve seller: ${error.message}`))}><Icon name="check" /> Approve</button>
+              <button onClick={() => approveSeller(user.uid)}><Icon name="check" /> Approve</button>
               <button className="danger" onClick={() => void setSellerApproval(user.uid, false).then(() => notify("Seller application rejected")).catch((error: Error) => notify(`Could not reject seller: ${error.message}`))}>Reject</button>
             </div>
           </article>
         ))}
       </div>
-      <div className="section-heading"><div><span className="eyebrow">Marketplace</span><h2>Seller shops</h2></div></div>
+      <div className="section-heading"><div><span className="eyebrow">Marketplace</span><h2>Seller accounts</h2></div></div>
       <div className="admin-list">{sellers.map((seller) => <article key={seller.id}><img src={seller.image} alt="" /><div><h3>{seller.name}</h3><span>{seller.place}</span><small>{products.filter((product) => product.sellerId === seller.id).length} products · {orders.filter((order) => order.sellerId === seller.id).length} orders</small><small className={seller.active ? "seller-active" : "seller-paused"}>{seller.active ? "Active seller" : "Paused seller"}</small></div><div className="admin-actions"><label className="compact-toggle"><input type="checkbox" checked={seller.active} onChange={() => { toggleSeller(seller); notify(seller.active ? "Seller paused" : "Seller activated"); }} /><span>{seller.active ? "Active" : "Paused"}</span></label><button className="danger" onClick={() => { if (window.confirm(`Remove ${seller.name} and all their products?`)) { deleteSeller(seller.id); notify("Seller and their products removed"); } }}><Icon name="trash" /> Remove</button></div></article>)}</div>
     </>}
-    {tab === "sellers" && <><div className="section-heading"><div><span className="eyebrow">Approved seller accounts</span><h2>Seller access</h2></div></div><div className="admin-list">{users.filter((user) => user.role === "seller" && user.sellerStatus === "approved").map((seller) => <article key={seller.uid}><span className="admin-order-icon"><Icon name="store" /></span><div><h3>{seller.shopName}</h3><span>{seller.firstName} {seller.lastName} · {seller.email}</span><small>{seller.accountStatus} · {seller.village}</small></div><button className={seller.accountStatus === "suspended" ? "" : "danger"} onClick={() => void setAccountSuspended(seller.uid, seller.accountStatus !== "suspended").then(() => notify(seller.accountStatus === "suspended" ? "Seller reactivated" : "Seller suspended")).catch((error: Error) => notify(`Could not update seller: ${error.message}`))}>{seller.accountStatus === "suspended" ? "Reactivate" : "Suspend"}</button></article>)}</div></>}
+    {tab === "sellers" && <><div className="section-heading"><div><span className="eyebrow">Approved seller accounts</span><h2>Seller access</h2></div></div><div className="admin-list">{users.filter((user) => user.role === "seller" && user.sellerStatus === "approved").map((seller) => <article key={seller.uid}><span className="admin-order-icon"><Icon name="store" /></span><div><h3>{seller.firstName} {seller.lastName}</h3><span>{seller.email}</span><small>{seller.accountStatus} · {seller.village}</small></div><button className={seller.accountStatus === "suspended" ? "" : "danger"} onClick={() => void setAccountSuspended(seller.uid, seller.accountStatus !== "suspended").then(() => notify(seller.accountStatus === "suspended" ? "Seller reactivated" : "Seller suspended")).catch((error: Error) => notify(`Could not update seller: ${error.message}`))}>{seller.accountStatus === "suspended" ? "Reactivate" : "Suspend"}</button></article>)}</div></>}
     {tab === "buyers" && <div className="admin-list">{users.filter((user) => user.role === "customer").map((customer) => <article key={customer.uid}><span className="admin-order-icon"><Icon name="orders" /></span><div><h3>{customer.firstName} {customer.lastName}</h3><span>{customer.email} · {customer.phoneNumber}</span><small>{customer.accountStatus} account · {orders.filter((order) => order.buyerId === customer.uid).length} orders</small></div><button className={customer.accountStatus === "suspended" ? "" : "danger"} onClick={() => void setAccountSuspended(customer.uid, customer.accountStatus !== "suspended").then(() => notify(customer.accountStatus === "suspended" ? "Customer account reactivated" : "Customer account suspended")).catch((error: Error) => notify(`Could not update customer: ${error.message}`))}>{customer.accountStatus === "suspended" ? "Reactivate" : "Suspend"}</button></article>)}</div>}
-    {tab === "products" && <><div className="section-heading"><div><span className="eyebrow">Marketplace</span><h2>Product listings</h2></div><span>{products.length} products</span></div><div className="admin-list">{products.map((product) => <article key={product.id}><img src={product.image} alt="" /><div><h3>{product.name}</h3><span>{product.seller}</span><small>R{product.price} • {product.stock} in stock</small></div><div className="admin-actions"><button onClick={() => setEditingProduct(product)}><Icon name="edit" /> Edit</button><button className="danger" onClick={() => { deleteProduct(product.id); notify("Product removed from the market"); }}><Icon name="trash" /> Delete</button></div></article>)}</div></>}
+    {tab === "products" && <><div className="section-heading"><div><span className="eyebrow">Marketplace</span><h2>Product listings</h2></div><span>{products.length} products</span></div><div className="admin-list">{products.map((product) => <article key={product.id}><img src={product.image} alt="" /><div><h3>{product.name}</h3><small>{product.category ?? "Category pending"} · R{product.price} · {product.stock} in stock</small></div><div className="admin-actions"><button onClick={() => setEditingProduct(product)}><Icon name="edit" /> Edit</button><button className="danger" onClick={() => { deleteProduct(product.id); notify("Product removed from the market"); }}><Icon name="trash" /> Delete</button></div></article>)}</div></>}
     {tab === "orders" && <div className="admin-list">{orders.map((order) => <article key={order.id}><span className="admin-order-icon"><Icon name="orders" /></span><div><h3>{order.id} • {order.buyer}</h3><span>{order.items}</span><small>{order.status} • R{order.amount.toFixed(2)} cash • {order.paid ? "Paid" : "Payment not confirmed"}</small></div><div className="admin-actions"><label className="compact-toggle"><input type="checkbox" checked={Boolean(order.paid)} onChange={(event) => {
       const paid = event.target.checked;
       void updateOrder({ ...order, paid }).then(() => notify("Payment status updated")).catch((error: Error) => notify(`Could not update payment: ${error.message}`));
@@ -579,7 +592,7 @@ function Admin({ sellers, products, orders, users, sellerApplications, categorie
       void updateOrder({ ...order, status: "Completed" }).then(() => notify("Order marked completed")).catch((error: Error) => notify(`Could not complete order: ${error.message}`));
     }}><Icon name="check" /> Complete</button></div></article>)}</div>}
     {tab === "categories" && <><form className="category-form" onSubmit={(event) => { event.preventDefault(); void addCategory(categoryName).then(() => setCategoryName("")).catch((error: Error) => notify(`Could not add category: ${error.message}`)); }}><label className="auth-field">New category<input required maxLength={40} value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="e.g. Fresh produce" /></label><button className="primary">Add category</button></form><div className="admin-list">{categories.map((category) => <article key={category.id}><div><h3>{category.name}</h3></div><button className="danger" disabled={products.some((product) => product.category === category.name)} onClick={() => deleteCategory(category.id)}>{products.some((product) => product.category === category.name) ? "In use" : "Delete"}</button></article>)}</div></>}
-    {editingProduct && <ProductForm product={editingProduct} categories={categories} onClose={() => setEditingProduct(null)} onSave={(product) => { saveProduct(product); setEditingProduct(null); notify("Product update submitted"); }} />}
+    {editingProduct && <ProductForm product={editingProduct} categories={categories} canEditCategory onClose={() => setEditingProduct(null)} onSave={(product) => { saveProduct(product); setEditingProduct(null); notify("Product update submitted"); }} />}
   </main>;
 }
 
@@ -759,7 +772,7 @@ function MarketplaceApp({ role }: { role: Role }) {
 
   const sellerShop: Seller = {
     id: user?.uid ?? "",
-    name: profile?.shopName ?? `${profile?.firstName ?? ""} ${profile?.lastName ?? ""}`.trim(),
+    name: `${profile?.firstName ?? ""} ${profile?.lastName ?? ""}`.trim(),
     place: profile?.village ?? "Molelema",
     image: "/assets/seller-firewood.png",
     sales: 0,
@@ -768,7 +781,7 @@ function MarketplaceApp({ role }: { role: Role }) {
   const visibleSellers = role === "seller" ? [sellerShop] : sellers;
 
   return <div className="app-shell"><Header role={role} />
-    {role === "buyer" && <Buyer uid={user?.uid ?? ""} products={products.filter((product) => sellers.some((seller) => seller.id === product.sellerId && seller.active))} orders={orders} createOrder={createOrder} updateOrder={updateOrder} notify={notify} />}
+    {role === "buyer" && <Buyer uid={user?.uid ?? ""} products={products.filter((product) => product.category !== null && sellers.some((seller) => seller.id === product.sellerId && seller.active))} sellers={sellers} orders={orders} createOrder={createOrder} updateOrder={updateOrder} notify={notify} />}
     {role === "seller" && profile && <SellerView uid={user?.uid ?? ""} profile={profile} products={products} orders={orders} categories={categories} saveProduct={saveProduct} deleteProduct={deleteProduct} updateOrder={updateOrder} notify={notify} />}
     {role === "admin" && <Admin sellers={visibleSellers} products={products} orders={orders} users={users} sellerApplications={sellerApplications} categories={categories} saveProduct={saveProduct} deleteSeller={deleteSeller} deleteProduct={deleteProduct} updateOrder={updateOrder} addCategory={addCategory} deleteCategory={deleteCategory} toggleSeller={(seller) => { const updated = { ...seller, active: !seller.active }; setSellers((items) => items.map((item) => item.id === seller.id ? updated : item)); void saveRecord("sellers", updated).catch((error: Error) => notify(`Could not update seller: ${error.message}`)); }} notify={notify} />}
     <nav className="mobile-nav"><Link to={role === "buyer" ? "/market" : `/${role}`}><Icon name={role === "buyer" ? "shop" : role === "seller" ? "store" : "shield"} /><span>{role === "buyer" ? "Shop" : role === "seller" ? "Seller" : "Admin"}</span></Link><Link to="/profile"><Icon name="eye" /><span>Profile</span></Link><button onClick={() => void logout().catch((error: Error) => notify(`Could not log out: ${error.message}`))}><Icon name="close" /><span>Log out</span></button></nav>

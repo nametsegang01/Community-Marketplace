@@ -113,8 +113,6 @@ export type UserProfile = {
   accountStatus: AccountStatus;
   createdAt?: unknown;
   updatedAt?: unknown;
-  shopName?: string;
-  businessDescription?: string;
   village?: string;
   sellerStatus?: "pending" | "approved" | "rejected";
 };
@@ -127,7 +125,6 @@ export type SellerProductDraft = {
   price: number;
   stock: number;
   unit: string;
-  category: string;
   image: string;
 };
 export type SellerProductApplication = SellerProductDraft & {
@@ -323,10 +320,15 @@ export async function updateOwnUserProfile(
   throwOnError(error);
 }
 
-export async function setSellerApproval(uid: string, approved: boolean): Promise<void> {
+export async function setSellerApproval(
+  uid: string,
+  approved: boolean,
+  categories: { productId: string; category: string }[] = [],
+): Promise<void> {
   const { error } = await requireSupabase().rpc("review_seller_application", {
     p_uid: uid,
     p_approved: approved,
+    p_categories: toDatabase(categories),
   });
   throwOnError(error);
 }
